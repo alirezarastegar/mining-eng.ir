@@ -1,0 +1,177 @@
+.ugv-dashboard {
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 24px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+    border-left: 4px solid #1e5a7d;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #34495e;
+}
+
+.ugv-main-card {
+    background: linear-gradient(135deg, #1e5a7d 0%, #2c3e50 100%);
+    color: #ecf0f1;
+    padding: 20px 24px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+}
+
+.ugv-main-card h3 {
+    margin: 0 0 8px;
+    font-size: 18px;
+}
+
+.ugv-main-value {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0;
+}
+
+.ugv-main-value .ugv-unit {
+    font-size: 14px;
+    margin-left: 6px;
+    opacity: 0.9;
+}
+
+.ugv-governing {
+    margin-top: 8px;
+    font-size: 14px;
+}
+
+.ugv-secondary {
+    margin-top: 4px;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.ugv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.ugv-card {
+    background: #fdfdfd;
+    border-radius: 6px;
+    padding: 16px 18px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    border: 1px solid #e5e8ec;
+}
+
+.ugv-card h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #1e5a7d;
+    font-size: 15px;
+}
+
+.ugv-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 6px;
+}
+
+.ugv-table th,
+.ugv-table td {
+    padding: 8px 6px;
+    border-bottom: 1px solid #eef1f4;
+    text-align: left;
+}
+
+.ugv-table th {
+    background: #1e5a7d;
+    color: #ecf0f1;
+    font-weight: 600;
+}
+
+.ugv-governing-row {
+    background-color: #fff7e0;
+    font-weight: 600;
+}
+
+.ugv-governing-row td:first-child::before {
+    content: "★ ";
+    color: #f39c12;
+}
+
+/* Bar chart */
+.ugv-bar-chart {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    height: 160px;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 6px;
+    background: #f7f9fb;
+    border-radius: 6px;
+    border: 1px solid #e1e5ea;
+}
+
+.ugv-bar {
+    flex: 1;
+    position: relative;
+    background: linear-gradient(180deg, #27ae60 0%, #2ecc71 100%);
+    border-radius: 4px 4px 0 0;
+    min-height: 4px;
+    transition: height 0.4s ease, box-shadow 0.3s ease;
+}
+
+.ugv-bar span {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translate(-50%, -4px);
+    font-size: 11px;
+    font-weight: 600;
+    color: #34495e;
+}
+
+.ugv-bar-velocity {
+    background: linear-gradient(180deg, #2980b9 0%, #3498db 100%);
+}
+
+.ugv-bar-personnel {
+    background: linear-gradient(180deg, #8e44ad 0%, #9b59b6 100%);
+}
+
+.ugv-bar-gas {
+    background: linear-gradient(180deg, #c0392b 0%, #e74c3c 100%);
+}
+
+.ugv-bar-diesel {
+    background: linear-gradient(180deg, #f39c12 0%, #f1c40f 100%);
+}
+
+.ugv-bar-heat {
+    background: linear-gradient(180deg, #16a085 0%, #1abc9c 100%);
+}
+
+.ugv-chart-legend {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #7f8c8d;
+}
+
+/* RTL */
+body.rtl .ugv-table th,
+body.rtl .ugv-table td {
+    text-align: right;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    .ugv-dashboard {
+        padding: 16px;
+    }
+
+    .ugv-main-card {
+        padding: 16px;
+    }
+
+    .ugv-main-value {
+        font-size: 24px;
+    }
+}

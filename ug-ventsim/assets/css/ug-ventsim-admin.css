@@ -1,0 +1,234 @@
+/**
+ * UG-VentSim Admin Styles
+ */
+
+.ugv-wrap {
+    margin: 20px 0;
+}
+
+.ugv-page-title {
+    color: #1e5a7d;
+    border-bottom: 3px solid #f39c12;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+.ugv-card {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.ugv-card h2 {
+    color: #1e5a7d;
+    margin-top: 0;
+    border-bottom: 2px solid #f39c12;
+    padding-bottom: 10px;
+}
+
+.ugv-flex {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.ugv-flex-1 {
+    flex: 1;
+    min-width: 300px;
+}
+
+.ugv-gap {
+    gap: 20px;
+}
+
+/* Table Styles */
+.ugv-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+}
+
+.ugv-table thead {
+    background: #f5f5f5;
+}
+
+.ugv-table th {
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    color: #1e5a7d;
+    border-bottom: 2px solid #ddd;
+}
+
+.ugv-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #eee;
+}
+
+.ugv-table tr:hover {
+    background: #f9f9f9;
+}
+
+/* Form Styles */
+.form-table th {
+    color: #1e5a7d;
+    font-weight: 600;
+}
+
+.form-table input[type="text"],
+.form-table input[type="number"],
+.form-table input[type="email"],
+.form-table textarea,
+.form-table select {
+    width: 100%;
+    max-width: 400px;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.form-table input[type="checkbox"] {
+    margin-right: 5px;
+}
+
+.form-table label {
+    font-size: 14px;
+    color: #333;
+}
+
+.form-table .description {
+    display: block;
+    margin-top: 5px;
+    font-size: 12px;
+    color: #666;
+}
+
+/* Links & Buttons */
+.ugv-link-danger {
+    color: #c0152f;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.ugv-link-danger:hover {
+    color: #a01225;
+    text-decoration: underline;
+}
+
+.button,
+.button-primary,
+.button-secondary {
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 13px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.button-primary {
+    background: #1e5a7d;
+    color: white;
+    border: none;
+}
+
+.button-primary:hover {
+    background: #154457;
+}
+
+.button-secondary {
+    background: #f39c12;
+    color: white;
+    border: none;
+}
+
+.button-secondary:hover {
+    background: #d68910;
+}
+
+/* Success/Warning Boxes */
+.notice {
+    margin: 20px 0;
+    padding: 12px;
+    border-left: 4px solid;
+    border-radius: 4px;
+}
+
+.notice-success {
+    background: #e8f5e9;
+    border-left-color: #27ae60;
+    color: #1b5e20;
+}
+
+.notice-error {
+    background: #ffebee;
+    border-left-color: #c0152f;
+    color: #b71c1c;
+}
+
+.notice-warning {
+    background: #fff3e0;
+    border-left-color: #f39c12;
+    color: #e65100;
+}
+
+.notice-info {
+    background: #e3f2fd;
+    border-left-color: #1e5a7d;
+    color: #0d47a1;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .ugv-flex {
+        flex-direction: column;
+    }
+
+    .ugv-flex-1 {
+        min-width: 100%;
+    }
+
+    .form-table input[type="text"],
+    .form-table input[type="number"],
+    .form-table textarea,
+    .form-table select {
+        max-width: 100%;
+    }
+
+    .ugv-table {
+        font-size: 12px;
+    }
+
+    .ugv-table th,
+    .ugv-table td {
+        padding: 8px 6px;
+    }
+}
+
+/* Print Styles */
+@media print {
+    .ugv-wrap {
+        margin: 0;
+    }
+
+    .button,
+    .button-primary,
+    .button-secondary,
+    .notice {
+        display: none;
+    }
+
+    .ugv-card {
+        page-break-inside: avoid;
+        border: 1px solid #999;
+        box-shadow: none;
+    }
+
+    .ugv-table {
+        page-break-inside: avoid;
+    }
+}

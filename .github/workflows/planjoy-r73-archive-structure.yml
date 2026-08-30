@@ -1,50 +1,10 @@
-name: PlanJoy R7.3 Archive Structure Probe
+name: PlanJoy R7.3 Archive Structure Probe (Archived)
 
 on:
-  push:
-    branches: [tmp-planjoy-r73-final-delivery]
   workflow_dispatch:
 
 jobs:
-  inspect:
+  archived:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Inspect historical Base64 streams and gzip members
-        shell: bash
-        run: |
-          set -uxo pipefail
-          git fetch --no-tags origin tmp-planjoy-r73-desktop-ci2:refs/remotes/origin/tmp-planjoy-r73-desktop-ci2
-          rm -rf recovered && mkdir recovered
-          for n in 00 01 02 03 04 05; do git show "origin/tmp-planjoy-r73-desktop-ci2:planjoy-r73-desktop/part${n}.b64"; done | tr -d '\r\n ' | base64 -d > recovered/a.bin
-          for n in 06 08 09 10; do git show "origin/tmp-planjoy-r73-desktop-ci2:planjoy-r73-desktop/part${n}.b64"; done | tr -d '\r\n ' | base64 -d > recovered/b.bin
-          cat recovered/a.bin recovered/b.bin > recovered/ab.bin
-          for f in recovered/a.bin recovered/b.bin recovered/ab.bin; do
-            echo "===== $f ====="
-            wc -c "$f"; sha256sum "$f"; file "$f"; xxd -l 32 "$f"
-            gzip -t "$f" && echo GZIP_TEST_PASS || echo GZIP_TEST_FAIL
-            tar -tzf "$f" > "$f.members" 2> "$f.err" && echo TAR_LIST_PASS || echo TAR_LIST_FAIL
-            echo MEMBERS=$(wc -l < "$f.members")
-            head -30 "$f.members"
-            echo LAST; tail -30 "$f.members"
-            echo ERR; cat "$f.err"
-          done
-          python3 - <<'PY'
-          from pathlib import Path
-          import gzip, hashlib
-          for name in ['a.bin','b.bin','ab.bin']:
-              p=Path('recovered')/name
-              try:
-                  raw=gzip.decompress(p.read_bytes())
-                  print(name,'GZIP_DECOMPRESS_PASS',len(raw),hashlib.sha256(raw).hexdigest(),raw[:32].hex(),raw[-32:].hex())
-                  (Path('recovered')/(name+'.raw')).write_bytes(raw)
-              except Exception as e:
-                  print(name,'GZIP_DECOMPRESS_FAIL',type(e).__name__,repr(e))
-          PY
-          for f in recovered/*.raw; do
-            echo "===== RAW $f ====="; wc -c "$f"; file "$f"; xxd -l 32 "$f"; tail -c 64 "$f" | xxd
-          done
-          exit 0
+      - run: echo 'Historical archive structure investigation completed.'

@@ -1,0 +1,25 @@
+name: PlanJoy R7.3 Android Tar Probe
+on:
+  push:
+    branches: [tmp-planjoy-r73-ci]
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode and inspect Android tar
+        shell: bash
+        run: |
+          set -euxo pipefail
+          base64 -d planjoy-r73-android-tar/chunk00.b64 > r73-android.tar.gz
+          file r73-android.tar.gz
+          gzip -t r73-android.tar.gz
+          sha256sum r73-android.tar.gz
+          mkdir out
+          tar -xzf r73-android.tar.gz -C out
+          find out -maxdepth 5 -type f | sort | head -100
+          test -n "$(find out -name build.gradle.kts -print -quit)"
+          test -n "$(find out -name R72Features.kt -print -quit)"
+          test -n "$(find out -name AppUi.kt -print -quit)"

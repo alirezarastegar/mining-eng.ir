@@ -1,0 +1,188 @@
+name: PlanJoy R7.3 Production Certification v2
+on:
+  push:
+    branches: [tmp-planjoy-r73-ci]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Reconstruct public-safe source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,re
+          out=bytearray()
+          for p in sorted(Path('planjoy-r73-ci/source').glob('part*.b64')):
+              raw=p.read_text(errors='ignore')
+              clean=re.sub(r'[^A-Za-z0-9+/=]','',raw)
+              print(p.name,'raw',len(raw),'clean',len(clean),'removed',len(raw)-len(clean))
+              clean += '='*((-len(clean))%4)
+              out.extend(base64.b64decode(clean,validate=False))
+          Path('r73-source.tar.gz').write_bytes(out)
+          print('decoded bytes',len(out),out[:8])
+          PY
+          gzip -t r73-source.tar.gz
+          mkdir work
+          tar -xzf r73-source.tar.gz -C work
+          ROOT=work
+          if [ ! -d "$ROOT/android_native" ]; then ROOT=$(dirname "$(find work -type d -name android_native -print -quit)"); fi
+          test -d "$ROOT/android_native"; test -d "$ROOT/src"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+          printf '#define PLANJOY_EMBED_FA_FONT 0\n' > "$ROOT/src/font_embed_config.h"
+          mkdir -p "$ROOT/android_native/app/src/main/res/font"
+          cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf "$ROOT/android_native/app/src/main/res/font/iransans_xv.ttf"
+      - name: Prepare CI manifest
+        shell: bash
+        run: |
+          cd "$ROOT"; mkdir -p build
+          cp "$GITHUB_WORKSPACE/planjoy-r73-ci/update-channel-ci.json" build/PlanJoyR73-update.json
+          printf CI_PLACEHOLDER > build/PlanJoyR73-update.json.sig
+      - name: Build Windows
+        shell: bash
+        run: |
+          set -euxo pipefail; cd "$ROOT"
+          bash tools/build_windows.sh build/PlanJoyR73.exe
+          bash tools/build_sync_agent.sh build/PlanJoySyncAgentR73.exe
+          if [ -f tools/build_updater.py ]; then python3 tools/build_updater.py; else (cd updater_go && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o ../build/PlanJoyUpdateR73.exe .); fi
+          python3 tools/build_installer.py
+          file build/*.exe
+      - name: Build Android + lint
+        shell: bash
+        run: |
+          set -euxo pipefail; cd "$ROOT/android_native"
+          gradle --no-daemon --stacktrace :app:assembleProductionDebug :app:assembleProductionRelease :app:lintProductionDebug
+          test -s app/build/outputs/apk/production/debug/app-production-debug.apk
+          test -s app/build/outputs/apk/production/release/app-production-release-unsigned.apk
+          ! grep -q ' Error:' app/build/reports/lint-results-productionDebug.txt
+      - name: Static gates
+        shell: bash
+        run: |
+          set -euxo pipefail; cd "$ROOT"
+          grep -q 'versionCode=73000' android_native/app/build.gradle.kts
+          grep -q 'versionName="0.7.3"' android_native/app/build.gradle.kts
+          grep -q 'R73' android_native/app/src/main/java/com/planjoy/r7/R73Certification.kt
+          grep -q 'PlanJoyUpdateR73.exe' installer_go/main.go
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile('android_native/app/build/outputs/apk/production/debug/app-production-debug.apk') as z:
+              assert z.testzip() is None
+              assert any('iransans_xv' in n for n in z.namelist())
+          for n in ['PlanJoyR73.exe','PlanJoySyncAgentR73.exe','PlanJoyUpdateR73.exe','PlanJoyR73-Installer-v0.7.3.exe']:
+              p=Path('build')/n; assert p.exists() and p.stat().st_size>10000
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r73-cert-v2-build
+          path: |
+            ${{ env.ROOT }}/build/PlanJoyR73.exe
+            ${{ env.ROOT }}/build/PlanJoySyncAgentR73.exe
+            ${{ env.ROOT }}/build/PlanJoyUpdateR73.exe
+            ${{ env.ROOT }}/build/PlanJoyR73-Installer-v0.7.3.exe
+            ${{ env.ROOT }}/build/PlanJoyR73-Installer-x64-v0.7.3.exe
+            ${{ env.ROOT }}/android_native/app/build/outputs/apk/production/debug/app-production-debug.apk
+            ${{ env.ROOT }}/android_native/app/build/outputs/apk/production/release/app-production-release-unsigned.apk
+            ${{ env.ROOT }}/android_native/app/build/reports/lint-results-productionDebug.txt
+          retention-days: 3
+
+  windows-runtime:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/download-artifact@v5
+        with: {name: r73-cert-v2-build, path: cert}
+      - name: Windows loader, process and memory smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $app=(Get-ChildItem cert -Recurse -Filter PlanJoyR73.exe | Select-Object -First 1).FullName
+          if(!$app){throw 'app missing'}
+          foreach($pass in 1..4){
+            $p=Start-Process $app -PassThru; Start-Sleep -Milliseconds 1800
+            if($p.HasExited){throw "app exited early pass $pass exit=$($p.ExitCode)"}
+            $proc=Get-Process -Id $p.Id; if($proc.WorkingSet64 -gt 600MB){throw 'working set too high'}
+            Stop-Process -Id $p.Id -Force
+          }
+          Get-ComputerInfo | Select-Object WindowsProductName,WindowsVersion,OsBuildNumber | Format-List
+      - name: Authenticode pipeline test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $app=(Get-ChildItem cert -Recurse -Filter PlanJoyR73.exe | Select-Object -First 1).FullName
+          $cert=New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=PlanJoy R7.3 CI Disposable' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
+          $root=New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','CurrentUser');$root.Open('ReadWrite');$root.Add($cert);$root.Close()
+          $copy=Join-Path $env:RUNNER_TEMP 'PlanJoyR73-signed-test.exe'; Copy-Item $app $copy
+          $sig=Set-AuthenticodeSignature -FilePath $copy -Certificate $cert -HashAlgorithm SHA256
+          if($sig.Status -ne 'Valid'){throw "signing status $($sig.Status)"}
+          if((Get-AuthenticodeSignature $copy).Status -ne 'Valid'){throw 'signing readback failed'}
+
+  android-runtime:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [pixel_6, pixel_tablet]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@v5
+        with: {name: r73-cert-v2-build, path: cert}
+      - name: Locate APK
+        shell: bash
+        run: |
+          APK=$(find cert -name app-production-debug.apk -print -quit); test -s "$APK"; echo "APK=$APK" >> "$GITHUB_ENV"
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: ${{ matrix.profile }}
+          disable-animations: true
+          script: |
+            set -euxo pipefail
+            adb install -r "$APK"
+            adb shell pm grant app.planjoy.local android.permission.POST_NOTIFICATIONS || true
+            mkdir -p cert-matrix; max_time=0
+            for lang in en fa; do for cal in 0 1 2; do
+              adb shell am force-stop app.planjoy.local
+              adb shell am start -W -n app.planjoy.local/com.planjoy.r7.MainActivity --es qa_lang $lang --ei qa_calendar $cal --ei qa_theme $cal --ez qa_seed true --es open settings > cert-matrix/start-$lang-$cal.txt
+              t=$(grep -E '^TotalTime:' cert-matrix/start-$lang-$cal.txt | awk '{print $2}' || echo 0); [ "${t:-0}" -le "$max_time" ] || max_time=$t
+              sleep 1; adb exec-out screencap -p > cert-matrix/$lang-$cal.png
+              adb shell uiautomator dump /sdcard/r73.xml >/dev/null; adb pull /sdcard/r73.xml cert-matrix/$lang-$cal.xml >/dev/null
+              test $(stat -c%s cert-matrix/$lang-$cal.png) -gt 5000; test $(stat -c%s cert-matrix/$lang-$cal.xml) -gt 500
+            done; done
+            test "$max_time" -lt 8000
+            adb shell dumpsys meminfo app.planjoy.local > cert-matrix/meminfo.txt
+            python3 - <<'PY'
+            from pathlib import Path
+            import hashlib,struct
+            shots=list(Path('cert-matrix').glob('*.png')); assert len(shots)==6
+            for p in shots:
+                b=p.read_bytes(); assert b[:8]==b'\x89PNG\r\n\x1a\n'; w,h=struct.unpack('>II',b[16:24]); assert w>500 and h>500
+            assert len({hashlib.sha256(p.read_bytes()).hexdigest() for p in shots})>=2
+            PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r73-visual-v2-${{ matrix.profile }}
+          path: cert-matrix
+          retention-days: 3

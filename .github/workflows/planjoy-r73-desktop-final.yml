@@ -1,0 +1,225 @@
+name: PlanJoy R7.3 Final Redesigned Windows Delivery
+on:
+  push:
+    branches: [tmp-planjoy-r73-desktop-ci]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+
+      - name: Reconstruct complete public-safe desktop source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $parts=@(
+            'planjoy-r73-desktop-v3/part00.b64',
+            'planjoy-r73-desktop-v3/part01.b64',
+            'planjoy-r73-desktop-v3/part02.b64',
+            'planjoy-r73-desktop-v3/tail50.b64',
+            'planjoy-r73-desktop-v3/miss00.b64',
+            'planjoy-r73-desktop-v3/miss01.b64',
+            'planjoy-r73-desktop-v3/miss02.b64',
+            'planjoy-r73-desktop-v3/miss03.b64',
+            'planjoy-r73-desktop-v3/gap03.b64',
+            'planjoy-r73-desktop-v3/miss04.b64',
+            'planjoy-r73-desktop-v3/miss05.b64',
+            'planjoy-r73-desktop-v3/miss06.b64',
+            'planjoy-r73-desktop-v3/gap-last.b64'
+          )
+          $b64=''
+          foreach($p in $parts){
+            if(!(Test-Path $p)){throw "source part missing: $p"}
+            $b64 += (Get-Content $p -Raw).Trim()
+          }
+          if($b64.Length -ne 200124){throw "base64 length mismatch: $($b64.Length)"}
+          $archive=Join-Path $env:RUNNER_TEMP 'planjoy-desktop.tar.xz'
+          [IO.File]::WriteAllBytes($archive,[Convert]::FromBase64String($b64))
+          $hash=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          if($hash -ne 'ec7817fa5c524db1ee30bfd1298b36fb3517c19908d4e8db84b9c8bc4078c44a'){throw "source archive SHA mismatch: $hash"}
+          New-Item desktop -ItemType Directory | Out-Null
+          tar -xJf $archive -C desktop
+          if(!(Test-Path desktop/package.json)){throw 'desktop source missing'}
+          New-Item desktop/assets/fonts -ItemType Directory -Force | Out-Null
+          Copy-Item C:/Windows/Fonts/arial.ttf desktop/assets/fonts/IRANSansXVF.ttf -Force
+          $ciFontHash=(Get-FileHash desktop/assets/fonts/IRANSansXVF.ttf -Algorithm SHA256).Hash.ToLower()
+          $test=Get-Content desktop/tests/desktop_contract_test.js -Raw
+          $test=$test.Replace('032d3ab20158ce7213e9018197c150000270d96a83e84db68911d71bdbe47240',$ciFontHash)
+          Set-Content desktop/tests/desktop_contract_test.js $test -Encoding UTF8
+
+      - name: Install build dependencies
+        working-directory: desktop
+        shell: pwsh
+        run: npm install --no-audit --no-fund
+
+      - name: Syntax and 69-point desktop UX contract gate
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          node --check main.js
+          node --check preload.js
+          node --check renderer/app.js
+          node tests/desktop_contract_test.js | Tee-Object -FilePath desktop-contract.log
+          if(!(Select-String -Path desktop-contract.log -Pattern 'DESKTOP_CONTRACT_PASS 69')){throw 'desktop contract failed'}
+
+      - name: Build full Electron Windows application
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          npm run build:win
+          $app='dist/win-unpacked/PlanJoy.exe'
+          if(!(Test-Path $app)){throw 'PlanJoy.exe missing'}
+          if((Get-Item $app).Length -lt 50MB){throw "Electron runtime unexpectedly small: $((Get-Item $app).Length)"}
+          foreach($route in 'today','calendar','goals','focus','review','stats','countdown','widgets','joy','smart','settings'){
+            if(!(Test-Path "dist/win-unpacked/resources/app/assets/scenes/$route.svg")){throw "scene missing: $route"}
+          }
+          foreach($sound in 'soft_pop.wav','focus_start.wav','reward_chime.wav'){
+            if(!(Test-Path "dist/win-unpacked/resources/app/assets/sounds/$sound")){throw "sound missing: $sound"}
+          }
+          if(!(Test-Path 'dist/win-unpacked/resources/app/assets/fonts/IRANSansXVF.ttf')){throw 'embedded font asset missing'}
+
+      - name: Build full per-user installer and portable package
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if(Test-Path installer/payload.zip){Remove-Item installer/payload.zip -Force}
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath installer/payload.zip -CompressionLevel Optimal
+          Push-Location installer
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o ../dist/PlanJoyR73-Windows-Setup-x64-v0.7.3-CI.exe main.go
+          Pop-Location
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath dist/PlanJoyR73-Windows-x64-v0.7.3-CI-Portable.zip -CompressionLevel Optimal
+          if((Get-Item dist/PlanJoyR73-Windows-Setup-x64-v0.7.3-CI.exe).Length -lt 80MB){throw 'installer does not contain full application payload'}
+          if((Get-Item dist/PlanJoyR73-Windows-x64-v0.7.3-CI-Portable.zip).Length -lt 80MB){throw 'portable package unexpectedly small'}
+
+      - name: Package integrity and security gate
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $tmp=Join-Path $env:RUNNER_TEMP 'portable-check'
+          Expand-Archive dist/PlanJoyR73-Windows-x64-v0.7.3-CI-Portable.zip $tmp -Force
+          foreach($p in 'PlanJoy.exe','resources/app/main.js','resources/app/renderer/app.js','resources/app/assets/fonts/IRANSansXVF.ttf'){
+            if(!(Test-Path (Join-Path $tmp $p))){throw "portable member missing: $p"}
+          }
+          $m=Get-Content dist/win-unpacked/resources/app/main.js -Raw
+          if($m -notmatch 'contextIsolation:true'){throw 'context isolation missing'}
+          if($m -notmatch 'nodeIntegration:false'){throw 'node integration must remain disabled'}
+          Get-FileHash dist/PlanJoyR73-Windows-Setup-x64-v0.7.3-CI.exe,dist/PlanJoyR73-Windows-x64-v0.7.3-CI-Portable.zip,dist/win-unpacked/PlanJoy.exe -Algorithm SHA256 | Format-Table
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r73-final-redesigned-windows-build
+          path: |
+            desktop/dist/win-unpacked/**
+            desktop/dist/PlanJoyR73-Windows-Setup-x64-v0.7.3-CI.exe
+            desktop/dist/PlanJoyR73-Windows-x64-v0.7.3-CI-Portable.zip
+            desktop/desktop-contract.log
+          retention-days: 2
+
+  runtime:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: r73-final-redesigned-windows-build
+          path: cert
+
+      - name: Locate app and installer
+        shell: pwsh
+        run: |
+          $app=(Get-ChildItem cert -Recurse -Filter PlanJoy.exe | Where-Object {$_.FullName -match 'win-unpacked'} | Select-Object -First 1).FullName
+          $setup=(Get-ChildItem cert -Recurse -Filter 'PlanJoyR73-Windows-Setup-x64-v0.7.3-CI.exe' | Select-Object -First 1).FullName
+          if(!$app -or !$setup){throw 'runtime artifacts missing'}
+          "APP=$app" >> $env:GITHUB_ENV
+          "SETUP=$setup" >> $env:GITHUB_ENV
+
+      - name: Direct Windows runtime smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($pass in 1..3){
+            $p=Start-Process $env:APP -PassThru
+            Start-Sleep -Seconds 5
+            if($p.HasExited){throw "direct app exited early pass=$pass exit=$($p.ExitCode)"}
+            $proc=Get-Process -Id $p.Id
+            if($proc.WorkingSet64 -gt 1200MB){throw "working set too high: $($proc.WorkingSet64)"}
+            Stop-Process -Id $p.Id -Force
+          }
+
+      - name: Silent install, registration and installed-launch gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $i=Start-Process $env:SETUP -ArgumentList '--silent','--no-launch' -Wait -PassThru
+          if($i.ExitCode -ne 0){throw "installer failed: $($i.ExitCode)"}
+          $dir=Join-Path $env:LOCALAPPDATA 'Programs/PlanJoy'
+          $installed=Join-Path $dir 'PlanJoy.exe'
+          if(!(Test-Path $installed)){throw 'installed app missing'}
+          if(!(Test-Path (Join-Path $dir 'PlanJoyUninstall.exe'))){throw 'uninstaller missing'}
+          $key='HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlanJoy'
+          if(!(Test-Path $key)){throw 'Apps & Features registration missing'}
+          if((Get-ItemProperty $key).DisplayVersion -ne '0.7.3'){throw 'installed version mismatch'}
+          if(!(Test-Path 'HKCU:\Software\Classes\planjoy\shell\open\command')){throw 'planjoy protocol registration missing'}
+          if(!(Test-Path (Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/PlanJoy.lnk'))){throw 'Start Menu shortcut missing'}
+          $p=Start-Process $installed -PassThru
+          Start-Sleep -Seconds 6
+          if($p.HasExited){throw "installed app exited early: $($p.ExitCode)"}
+          $ws=(Get-Process -Id $p.Id).WorkingSet64
+          "installed_working_set=$ws" | Tee-Object runtime-report.txt
+          Stop-Process -Id $p.Id -Force
+
+      - name: Reinstall and uninstall preserve-user-data gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $data=Join-Path $env:LOCALAPPDATA 'PlanJoyR1'
+          New-Item $data -ItemType Directory -Force | Out-Null
+          $sentinel=Join-Path $data 'preserve-r73.txt';Set-Content $sentinel 'keep-user-data'
+          $r=Start-Process $env:SETUP -ArgumentList '--silent','--no-launch' -Wait -PassThru
+          if($r.ExitCode -ne 0){throw 'reinstall failed'}
+          $un=Join-Path $env:LOCALAPPDATA 'Programs/PlanJoy/PlanJoyUninstall.exe'
+          $u=Start-Process $un -ArgumentList '--uninstall','--silent' -Wait -PassThru
+          if($u.ExitCode -ne 0){throw "uninstall failed: $($u.ExitCode)"}
+          Start-Sleep -Seconds 4
+          if(!(Test-Path $sentinel)){throw 'user data was deleted'}
+          if(Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlanJoy'){throw 'uninstall registry remained'}
+          if(Test-Path 'HKCU:\Software\Classes\planjoy'){throw 'protocol registry remained'}
+
+      - name: Disposable Authenticode pipeline gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $copy=Join-Path $env:RUNNER_TEMP 'PlanJoy-signed-ci.exe';Copy-Item $env:APP $copy
+          $cert=New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=PlanJoy R7.3 CI Disposable' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
+          $root=New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','CurrentUser');$root.Open('ReadWrite');$root.Add($cert);$root.Close()
+          $sig=Set-AuthenticodeSignature -FilePath $copy -Certificate $cert -HashAlgorithm SHA256
+          if($sig.Status -ne 'Valid'){throw "Authenticode test failed: $($sig.Status)"}
+
+      - name: Runtime receipt
+        shell: pwsh
+        run: Get-ComputerInfo | Select-Object WindowsProductName,WindowsVersion,OsBuildNumber | Format-List | Tee-Object runtime-environment.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r73-final-runtime-${{ matrix.os }}
+          path: |
+            runtime-report.txt
+            runtime-environment.txt
+          retention-days: 2

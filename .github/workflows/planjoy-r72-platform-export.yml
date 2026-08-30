@@ -1,0 +1,27 @@
+name: PlanJoy R7.2 Android Platform Export
+on:
+  push:
+    branches: [tmp-planjoy-r72-toolchain]
+  workflow_dispatch:
+jobs:
+  platform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export compile SDK platform
+        shell: bash
+        run: |
+          set -euxo pipefail
+          find "$ANDROID_HOME/platforms" -maxdepth 2 -type f -name android.jar -print || true
+          ls -la "$ANDROID_HOME/platforms" || true
+          MATCH=$(find "$ANDROID_HOME/platforms" -mindepth 1 -maxdepth 1 -type d \( -name 'android-37*' -o -name 'android-36*' \) | sort -V | tail -1)
+          test -n "$MATCH"
+          mkdir -p offline-platform/platforms
+          cp -a "$MATCH" offline-platform/platforms/
+          basename "$MATCH" | tee offline-platform/platform-name.txt
+          du -sh offline-platform
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoyR72-Android-platform
+          path: offline-platform
+          retention-days: 1

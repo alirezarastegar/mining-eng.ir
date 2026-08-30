@@ -27,7 +27,8 @@ jobs:
           base64 -d planjoy-r7-source/source.b64 > planjoy-r7-base.tar.gz
           echo '36dd8324b4d54e3dcacff3a6d28e2b6bb6153efcf54e337c99226cf1fdeadf11  planjoy-r7-base.tar.gz' | sha256sum -c -
           tar -xzf planjoy-r7-base.tar.gz
-          base64 -d planjoy-r71-ux/patch.tar.gz.b64 > planjoy-r71-ux/patch.tar.gz
+          cat planjoy-r71-ux/patch_chunks/chunk*.b64 > planjoy-r71-ux/patch-full.b64
+          base64 -d planjoy-r71-ux/patch-full.b64 > planjoy-r71-ux/patch.tar.gz
           echo '2e0a60663c32d9d86b7a7f9437d86627b073df70a1a03263e1156648b809b219  planjoy-r71-ux/patch.tar.gz' | sha256sum -c -
           tar -xzf planjoy-r71-ux/patch.tar.gz
           mkdir -p android_native/app/src/main/res/font

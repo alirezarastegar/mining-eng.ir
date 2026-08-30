@@ -86,29 +86,21 @@ jobs:
         working-directory: android_native
         run: |
           gradle --no-daemon --stacktrace :app:compileProductionDebugKotlin :app:compileProductionReleaseKotlin :app:processProductionDebugResources :app:processProductionReleaseResources :app:lintProductionDebug
-      - name: Install exact Android SDK platform for offline export
-        shell: bash
-        run: |
-          set -euxo pipefail
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)
-          test -x "$SDKMANAGER"
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-37" "build-tools;36.0.0" "platform-tools"
-          test -f "$ANDROID_HOME/platforms/android-37/android.jar"
       - name: Package offline build toolchain
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p offline-toolchain/android-sdk/platforms offline-toolchain/android-sdk/build-tools offline-toolchain/android-sdk/platform-tools offline-toolchain/gradle-user-home
+          mkdir -p offline-toolchain/android-sdk/build-tools offline-toolchain/android-sdk/platform-tools offline-toolchain/gradle-user-home
           GRADLE_BIN=$(readlink -f "$(command -v gradle)")
           GRADLE_HOME=$(dirname "$(dirname "$GRADLE_BIN")")
           cp -a "$GRADLE_HOME" offline-toolchain/gradle-9.5.0
-          cp -a "$ANDROID_HOME/platforms/android-37" offline-toolchain/android-sdk/platforms/
-          cp -a "$ANDROID_HOME/build-tools/36.0.0" offline-toolchain/android-sdk/build-tools/
+          if [ -d "$ANDROID_HOME/build-tools/36.0.0" ]; then BT="$ANDROID_HOME/build-tools/36.0.0"; else BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1); fi
+          test -n "$BT"
+          cp -a "$BT" offline-toolchain/android-sdk/build-tools/
           cp -a "$ANDROID_HOME/platform-tools/." offline-toolchain/android-sdk/platform-tools/
           cp -a "$HOME/.gradle/caches" offline-toolchain/gradle-user-home/
           if [ -d "$HOME/.gradle/notifications" ]; then cp -a "$HOME/.gradle/notifications" offline-toolchain/gradle-user-home/; fi
-          printf 'gradle=9.5.0\nagp=9.3.0\nkotlin_compose=2.2.10\ncompileSdk=37\ntargetSdk=37\ncompose_bom=2026.08.00\nactivity_compose=1.13.0\nbuild_tools=36.0.0\n' > offline-toolchain/metadata.txt
+          printf 'gradle=9.5.0\nagp=9.3.0\nkotlin_compose=2.2.10\ncompileSdk=37-via-AGP-sdk-runtime-cache\ntargetSdk=37\ncompose_bom=2026.08.00\nactivity_compose=1.13.0\nbuild_tools=%s\n' "$(basename "$BT")" > offline-toolchain/metadata.txt
           du -sh offline-toolchain/*
           find offline-toolchain -type f | wc -l
       - uses: actions/upload-artifact@v4

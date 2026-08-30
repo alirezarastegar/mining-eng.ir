@@ -8,20 +8,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Export compile SDK platform
+      - name: Export exact compile SDK platform
         shell: bash
         run: |
           set -euxo pipefail
-          find "$ANDROID_HOME/platforms" -maxdepth 2 -type f -name android.jar -print || true
-          ls -la "$ANDROID_HOME/platforms" || true
-          MATCH=$(find "$ANDROID_HOME/platforms" -mindepth 1 -maxdepth 1 -type d \( -name 'android-37*' -o -name 'android-36*' \) | sort -V | tail -1)
-          test -n "$MATCH"
+          MATCH="$ANDROID_HOME/platforms/android-37.0"
+          test -f "$MATCH/android.jar"
           mkdir -p offline-platform/platforms
           cp -a "$MATCH" offline-platform/platforms/
           basename "$MATCH" | tee offline-platform/platform-name.txt
           du -sh offline-platform
       - uses: actions/upload-artifact@v4
         with:
-          name: PlanJoyR72-Android-platform
+          name: PlanJoyR72-Android-platform-37.0
           path: offline-platform
           retention-days: 1

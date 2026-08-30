@@ -1,0 +1,49 @@
+name: PlanJoy R7.1.3 Publish CI Result
+on:
+  push:
+    branches: [tmp-planjoy-r713-parity]
+    paths-ignore:
+      - 'planjoy-r713-ci-output/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    if: ${{ !contains(github.event.head_commit.message, '[r713-artifact]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-planjoy-r713-parity
+          fetch-depth: 1
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Build full feature APK
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          bash planjoy-r713-gen/build_r713.sh > planjoy-r713-build.log 2>&1
+      - name: Record failure if any
+        if: steps.build.outcome != 'success'
+        shell: bash
+        run: |
+          mkdir -p planjoy-r713-ci-output
+          printf 'FAIL\n' > planjoy-r713-ci-output/build-status.txt
+          tail -n 600 planjoy-r713-build.log > planjoy-r713-ci-output/build-error-tail.txt
+      - name: Commit CI evidence and APK
+        shell: bash
+        run: |
+          mkdir -p planjoy-r713-ci-output
+          cp planjoy-r713-build.log planjoy-r713-ci-output/build-full.log || true
+          git config user.name 'PlanJoy CI'
+          git config user.email 'planjoy-ci@users.noreply.github.com'
+          git add planjoy-r713-ci-output
+          git commit -m '[r713-artifact] publish Android CI result' || exit 0
+          git push origin HEAD:tmp-planjoy-r713-parity

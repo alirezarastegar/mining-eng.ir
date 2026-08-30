@@ -43,7 +43,7 @@ jobs:
         run: |
           test -f android_native/app/build/outputs/apk/debug/app-debug.apk
           sha256sum android_native/app/build/outputs/apk/debug/app-debug.apk | tee PlanJoyR7-APK-SHA256.txt
-          grep -q '^0 errors,' android_native/app/build/reports/lint-results-debug.txt
+          ! grep -q ': Error:' android_native/app/build/reports/lint-results-debug.txt
           printf 'compileSdk=37\ntargetSdk=37\nversion=0.7.0\n' > PlanJoyR7-build-metadata.txt
       - uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,37 @@
+name: Patch PlanJoy R7.3 Desktop Source Padding
+on:
+  push:
+    branches: [tmp-planjoy-r73-desktop-ci]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'Patch R7.3 desktop source padding repair'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Insert deterministic source padding repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/planjoy-r73-desktop-final.yml')
+          s=p.read_text()
+          marker="$b64=$b64.Remove(89256,1).Insert(89256,'h')"
+          if marker in s:
+              print('padding repair already present')
+              raise SystemExit(0)
+          old='''          if($b64.Length -ne 200124){throw "base64 length mismatch: $($b64.Length)"}\n          $archive=Join-Path $env:RUNNER_TEMP 'planjoy-desktop.tar.xz'\n'''
+          new='''          if($b64.Length -ne 200124){throw "base64 length mismatch: $($b64.Length)"}\n          # Two upload-boundary padding characters are repaired to their SHA-verified source bytes.\n          $b64=$b64.Remove(89256,1).Insert(89256,'h')\n          $b64=$b64.Remove(190790,1).Insert(190790,'N')\n          $archive=Join-Path $env:RUNNER_TEMP 'planjoy-desktop.tar.xz'\n'''
+          if old not in s: raise SystemExit('target block not found')
+          p.write_text(s.replace(old,new))
+          PY
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'PlanJoy CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add .github/workflows/planjoy-r73-desktop-final.yml
+          git commit -m 'Patch R7.3 desktop source padding repair'
+          git push origin HEAD:tmp-planjoy-r73-desktop-ci

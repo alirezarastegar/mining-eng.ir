@@ -1,0 +1,21 @@
+name: PlanJoy R7.3 Desktop Padding Probe
+on:
+  push:
+    branches: [tmp-planjoy-r73-desktop-ci]
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - shell: pwsh
+        run: |
+          $parts=@('part00.b64','part01.b64','part02.b64','tail50.b64','miss00.b64','miss01.b64','miss02.b64','miss03.b64','gap03.b64','miss04.b64','miss05.b64','miss06.b64','gap-last.b64')
+          $offset=0;$all=''
+          foreach($n in $parts){
+            $p="planjoy-r73-desktop-v3/$n";$s=(Get-Content $p -Raw).Trim();$eq=@()
+            for($i=0;$i -lt $s.Length;$i++){if($s[$i] -eq '='){$eq += ($offset+$i)}}
+            Write-Host "$n len=$($s.Length) equals=$($eq -join ',')"
+            $all += $s;$offset += $s.Length
+          }
+          Write-Host "TOTAL=$($all.Length) ALL_EQUALS=$((0..($all.Length-1)|Where-Object{$all[$_] -eq '='}) -join ',')"

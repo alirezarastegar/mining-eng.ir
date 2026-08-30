@@ -1,6 +1,5 @@
 <resources>
  <string name="app_name">PlanJoy</string>
- <string name="widget_name">PlanJoy Today</string>
  <string name="widget_title">PlanJoy • Today</string>
  <string name="widget_empty">No tasks</string>
 </resources>

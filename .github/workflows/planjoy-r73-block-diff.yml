@@ -1,0 +1,29 @@
+name: PlanJoy R7.3 Desktop Block Diff
+on:
+  push:
+    branches: [tmp-planjoy-r73-desktop-ci]
+  workflow_dispatch:
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare 4096-character source blocks
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+          expected={
+            'tail50.b64':['ab611d483873c728effe398a2814cf7eca8afd23b35c2250b8e09bdf3e05bb15','e0750097410685c91207e8476506912250325365767efd76a52002e61e99cb7c','52d300df174d862c88e6cdf002fb0022d055247379667994e7cc75a3347011da','e4cf9de976b2a5f4cb9ffa72dbe96166827e4678b8926bb692597e73723696d2','25189c917ddd1971c51f71feca68deec9904cc074f029e90cb88d017f74586bf','7644bc75f20f1c3b3a3bb91771fe360995d3a61360fe9d27a901fddfd47356c7','adb9d9855d40f7c8837ffa0a0d8a54bac145a7d43a0d7e78228f28d070048c13','dfbf0529ae6626aa579010739acaab90fe794094d0c6a73c2563794317246194','ca97b294c3abf0ff64ef776481ea0eb9e7e50c97446d10855f38b3d2674bf122','cad31d90c676631bb5ef66c8dee9da4b00f28a2e7213011e1134b0f6b18b5d32'],
+            'miss05.b64':['aa995879a0d4211b51c1a87e6613e12fbe7dd10f1e254bfe438726f327f140e7','545794b78e1b9d194593b36f244f9b1c65cac74bfbd247572b57b0739ff4e2bd','9a420076bb09fb22f4e0cca97800f666ed299b3510b78ac9ba15a89e0a844909','59bddd2ecd475dfabcece5e513f61fc353fedc557bab110261085445c6a19a9a','6ea5cda2cc0135d476154cce8aee2a5c10f868c0291ca1d6778f4d610d38a86c','26661db15249d8e3e1faba0f3154ad69db6e7955ca3947ec76d94a61d843e299','326caea840eea9cc4e684a6a76ad1131fdab0af7584fdbed672b9fe011efc393','a35291d40460db1c930af9df0629eff8db5424d8153abbfb84a0a867e8f6786c']
+          }
+          root=Path('planjoy-r73-desktop-v3')
+          for name,want in expected.items():
+            text=(root/name).read_text().strip()
+            print(f'FILE {name} LENGTH {len(text)}')
+            for i in range(0,len(text),4096):
+              block=text[i:i+4096]
+              got=hashlib.sha256(block.encode()).hexdigest()
+              idx=i//4096
+              status='MATCH' if idx<len(want) and got==want[idx] else 'MISMATCH'
+              print(f'BLOCK {name} {idx} {i} {len(block)} {status} {got}')

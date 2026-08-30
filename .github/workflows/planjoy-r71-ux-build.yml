@@ -31,6 +31,9 @@ jobs:
           base64 -d planjoy-r71-ux/patch-full.b64 > planjoy-r71-ux/patch.tar.gz
           echo '2e0a60663c32d9d86b7a7f9437d86627b073df70a1a03263e1156648b809b219  planjoy-r71-ux/patch.tar.gz' | sha256sum -c -
           tar -xzf planjoy-r71-ux/patch.tar.gz
+          base64 -d planjoy-r71-ux/overlay-final.tar.gz.b64 > planjoy-r71-ux/overlay-final.tar.gz
+          echo 'edbe3843237b516153f1eb475d4f6846bf8bc82c59df69e2ff1bdf158b6985b5  planjoy-r71-ux/overlay-final.tar.gz' | sha256sum -c -
+          tar -xzf planjoy-r71-ux/overlay-final.tar.gz
           mkdir -p android_native/app/src/main/res/font
           base64 -d planjoy-r71-ux/font-placeholder.ttf.b64 > android_native/app/src/main/res/font/iransans_xv.ttf
           test -f android_native/app/src/main/java/com/planjoy/r7/AppUi.kt
@@ -41,16 +44,17 @@ jobs:
         shell: bash
         run: |
           test -f android_native/app/build/outputs/apk/debug/app-debug.apk
+          ! grep -q ' Error:' android_native/app/build/reports/lint-results-debug.txt
+          ! grep -q ' Warning:' android_native/app/build/reports/lint-results-debug.txt
           sha256sum android_native/app/build/outputs/apk/debug/app-debug.apk | tee PlanJoyR71-APK-SHA256.txt
-          ! grep -q 'Error:' android_native/app/build/reports/lint-results-debug.txt
           printf 'compileSdk=37\ntargetSdk=37\nversion=0.7.1\nfont=CI-placeholder-only\n' > PlanJoyR71-build-metadata.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: PlanJoyR71-Android-debug
+          name: PlanJoyR71-Android-UX-zero-warning
           path: |
             android_native/app/build/outputs/apk/debug/app-debug.apk
             android_native/app/build/reports/lint-results-debug.html
             android_native/app/build/reports/lint-results-debug.txt
             PlanJoyR71-APK-SHA256.txt
             PlanJoyR71-build-metadata.txt
-          retention-days: 7
+          retention-days: 3

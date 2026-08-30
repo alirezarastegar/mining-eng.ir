@@ -1,0 +1,38 @@
+name: PlanJoy R7 Android Build
+on:
+  push:
+    branches: [tmp-planjoy-r7-build]
+  workflow_dispatch:
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Unpack isolated source
+        run: tar -xzf planjoy-r7-android-source.tar.gz
+      - name: Build and lint
+        working-directory: android_native
+        run: gradle --no-daemon --stacktrace :app:assembleDebug :app:lintDebug
+      - name: Verify package
+        run: |
+          test -f android_native/app/build/outputs/apk/debug/app-debug.apk
+          sha256sum android_native/app/build/outputs/apk/debug/app-debug.apk | tee PlanJoyR7-APK-SHA256.txt
+          printf 'compileSdk=37\ntargetSdk=37\nversion=0.7.0\n' > PlanJoyR7-build-metadata.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoyR7-Android-debug
+          path: |
+            android_native/app/build/outputs/apk/debug/app-debug.apk
+            android_native/app/build/reports/lint-results-debug.html
+            android_native/app/build/reports/lint-results-debug.txt
+            PlanJoyR7-APK-SHA256.txt
+            PlanJoyR7-build-metadata.txt
+          retention-days: 7

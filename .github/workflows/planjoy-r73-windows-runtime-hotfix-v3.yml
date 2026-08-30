@@ -1,0 +1,584 @@
+name: PlanJoy R7.3 Windows Runtime Hotfix and Final Certification v3
+
+on:
+  push:
+    branches: [tmp-planjoy-r73-final-delivery]
+    paths:
+      - '.github/workflows/planjoy-r73-windows-runtime-hotfix-v3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  BASE_RUN_ID: '33342319495'
+  BASE_COMMIT: '4d0dbe919226c2993d3b2116f1e3bd0e9e629a69'
+  VERSION: '0.7.3'
+  SETUP_NAME: PlanJoyR73-Windows-Setup-x64-v0.7.3.exe
+  PORTABLE_NAME: PlanJoyR73-Windows-x64-v0.7.3-Portable.zip
+  SOURCE_NAME: PlanJoyR73-Source-v0.7.3.zip
+  FINAL_NAME: PlanJoyR73-Windows-Final-Delivery-v0.7.3.zip
+
+jobs:
+  hotfix:
+    name: Apply runtime hotfix and rebuild delivery packages
+    runs-on: windows-2025
+    timeout-minutes: 55
+    outputs:
+      hotfix_commit: ${{ steps.context.outputs.hotfix_commit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+
+      - id: context
+        name: Record hotfix context
+        shell: pwsh
+        run: |
+          "hotfix_commit=$env:GITHUB_SHA" >> $env:GITHUB_OUTPUT
+          [ordered]@{
+            base_run_id = $env:BASE_RUN_ID
+            base_commit = $env:BASE_COMMIT
+            hotfix_run_id = $env:GITHUB_RUN_ID
+            hotfix_commit = $env:GITHUB_SHA
+          } | ConvertTo-Json | Set-Content hotfix-context.json -Encoding UTF8
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-runtime-candidate
+          path: runtime-base
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.BASE_RUN_ID }}
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-delivery-candidate
+          path: delivery-base
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.BASE_RUN_ID }}
+
+      - name: Extract clean source and locate Windows runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item source,runtime,dist -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item source,runtime,dist -ItemType Directory -Force | Out-Null
+          Expand-Archive "delivery-base/$env:SOURCE_NAME" source -Force
+          $runtimeDir = (Get-ChildItem runtime-base -Directory -Recurse | Where-Object { $_.Name -eq 'win-unpacked' } | Select-Object -First 1).FullName
+          if(!$runtimeDir){ throw 'win-unpacked runtime was not found in the immutable base artifact' }
+          Copy-Item "$runtimeDir/*" runtime -Recurse -Force
+          if(!(Test-Path 'runtime/PlanJoy.exe')){ throw 'PlanJoy.exe missing after runtime staging' }
+          if(!(Test-Path 'source/installer/main.go')){ throw 'installer source missing from clean source package' }
+
+      - name: Apply and certify the LOCALAPPDATA startup hotfix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $old = "dataDir = path.join(app.getPath('localAppData'),'PlanJoyR1');"
+          $new = "dataDir = path.join(process.env.LOCALAPPDATA || app.getPath('appData'),'PlanJoyR1');"
+          $targets = @('source/main.js','runtime/resources/app/main.js')
+          foreach($target in $targets){
+            $text = Get-Content $target -Raw
+            $count = ([regex]::Matches($text,[regex]::Escape($old))).Count
+            if($count -ne 1){ throw "expected one invalid localAppData marker in $target, found $count" }
+            $text = $text.Replace($old,$new)
+            Set-Content $target $text -Encoding UTF8 -NoNewline
+            $patched = Get-Content $target -Raw
+            if($patched.Contains("getPath('localAppData')")){ throw "invalid Electron app.getPath name remained in $target" }
+            if(!$patched.Contains('process.env.LOCALAPPDATA')){ throw "LOCALAPPDATA hotfix missing from $target" }
+            node --check $target
+          }
+
+          foreach($manifestPath in @('source/SOURCE_RECOVERY_MANIFEST.json','runtime/resources/app/SOURCE_RECOVERY_MANIFEST.json')){
+            if(!(Test-Path $manifestPath)){ throw "source recovery manifest missing: $manifestPath" }
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            $mainPath = if($manifestPath.StartsWith('source/')){'source/main.js'}else{'runtime/resources/app/main.js'}
+            $mainHash = (Get-FileHash $mainPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $hotfix = [ordered]@{
+              id = 'R73-WIN-LOCALAPPDATA-STARTUP'
+              reason = "Electron app.getPath('localAppData') is not a supported path name"
+              replacement = "process.env.LOCALAPPDATA || app.getPath('appData')"
+              main_js_sha256 = $mainHash
+              applied_by_commit = $env:GITHUB_SHA
+            }
+            $manifest | Add-Member -NotePropertyName runtime_hotfixes -NotePropertyValue @($hotfix) -Force
+            foreach($entry in @($manifest.post_repair_files)){
+              if($entry.path -eq 'main.js'){
+                $entry.sha256 = $mainHash
+                $entry.size = (Get-Item $mainPath).Length
+              }
+            }
+            $manifest | ConvertTo-Json -Depth 14 | Set-Content $manifestPath -Encoding UTF8
+          }
+
+      - name: Run source, security and professional parity gates
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node --check main.js
+          node --check preload.js
+          node --check renderer/app.js
+          node tests/desktop_contract_test.js | Tee-Object -FilePath desktop-contract-hotfix.log
+          if(!(Select-String desktop-contract-hotfix.log -Pattern '^DESKTOP_CONTRACT_PASS 69$')){ throw '69-point desktop contract failed after hotfix' }
+          $main = Get-Content main.js -Raw
+          if($main -notmatch 'process\.env\.LOCALAPPDATA'){ throw 'LOCALAPPDATA hotfix gate failed' }
+          if($main -match "getPath\('localAppData'\)"){ throw 'unsupported Electron path name remains' }
+          if($main -notmatch 'contextIsolation:true' -or $main -notmatch 'nodeIntegration:false' -or $main -notmatch 'sandbox:true'){ throw 'Electron renderer security contract failed' }
+          if((Get-Content preload.js -Raw) -notmatch 'contextBridge\.exposeInMainWorld'){ throw 'secure preload bridge missing' }
+          if(Get-ChildItem . -Recurse -Filter '*.ttf' -ErrorAction SilentlyContinue){ throw 'clean source contains a private font binary' }
+          gofmt -w installer/main.go
+          $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+          Push-Location installer
+          try { go test ./... } finally { Pop-Location }
+
+      - name: Verify staged runtime before packaging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'PlanJoy.exe','resources/app/main.js','resources/app/preload.js',
+            'resources/app/renderer/app.js','resources/app/renderer/app.css',
+            'resources/app/renderer/index.html','resources/app/SOURCE_RECOVERY_MANIFEST.json',
+            'resources/app/assets/icons/planjoy.ico','resources/app/assets/sounds/reward_chime.wav'
+          )
+          foreach($relative in $required){ if(!(Test-Path (Join-Path runtime $relative))){ throw "runtime member missing: $relative" } }
+          if(Get-ChildItem 'runtime/resources/app/assets' -Recurse -Filter '*.ttf' -ErrorAction SilentlyContinue){ throw 'runtime contains a private font binary' }
+          $runtimeMain = Get-Content 'runtime/resources/app/main.js' -Raw
+          if($runtimeMain -notmatch 'process\.env\.LOCALAPPDATA'){ throw 'runtime main.js was not hotfixed' }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path 'runtime/PlanJoy.exe'))
+          $peOffset = [BitConverter]::ToInt32($bytes,0x3c)
+          $machine = [BitConverter]::ToUInt16($bytes,$peOffset+4)
+          if($machine -ne 0x8664){ throw ('PlanJoy.exe is not AMD64: 0x{0:X4}' -f $machine) }
+
+      - name: Build current-user installer, portable package and clean source package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item 'source/installer/payload.zip' -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path runtime/* -DestinationPath source/installer/payload.zip -CompressionLevel Optimal
+          Push-Location source/installer
+          try {
+            $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+            go build -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o "../../dist/$env:SETUP_NAME" main.go
+          } finally { Pop-Location }
+          Compress-Archive -Path runtime/* -DestinationPath "dist/$env:PORTABLE_NAME" -CompressionLevel Optimal
+
+          $sourceStage = Join-Path $env:RUNNER_TEMP 'PlanJoyR73-Source-v0.7.3-hotfix'
+          Remove-Item $sourceStage -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item source $sourceStage -Recurse -Force
+          Remove-Item (Join-Path $sourceStage 'installer/payload.zip') -Force -ErrorAction SilentlyContinue
+          if(Get-ChildItem $sourceStage -Recurse -Filter '*.ttf' -ErrorAction SilentlyContinue){ throw 'source stage contains a private font binary' }
+          Compress-Archive -Path "$sourceStage/*" -DestinationPath "dist/$env:SOURCE_NAME" -CompressionLevel Optimal
+
+          foreach($file in @("dist/$env:SETUP_NAME","dist/$env:PORTABLE_NAME","dist/$env:SOURCE_NAME")){
+            if(!(Test-Path $file)){ throw "delivery file missing: $file" }
+          }
+          if((Get-Item "dist/$env:SETUP_NAME").Length -lt 60MB){ throw 'setup package is unexpectedly small' }
+          if((Get-Item "dist/$env:PORTABLE_NAME").Length -lt 60MB){ throw 'portable package is unexpectedly small' }
+          if((Get-Item "dist/$env:SOURCE_NAME").Length -lt 100KB){ throw 'source package is unexpectedly small' }
+
+          $setupBytes = [System.IO.File]::ReadAllBytes((Resolve-Path "dist/$env:SETUP_NAME"))
+          $setupOffset = [BitConverter]::ToInt32($setupBytes,0x3c)
+          $setupMachine = [BitConverter]::ToUInt16($setupBytes,$setupOffset+4)
+          if($setupMachine -ne 0x8664){ throw ('setup is not AMD64: 0x{0:X4}' -f $setupMachine) }
+
+      - name: Validate rebuilt portable package from a clean extraction
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $check = Join-Path $env:RUNNER_TEMP 'planjoy-r73-hotfix-portable-check'
+          Remove-Item $check -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive "dist/$env:PORTABLE_NAME" $check -Force
+          foreach($relative in @('PlanJoy.exe','resources/app/main.js','resources/app/preload.js','resources/app/renderer/app.js','resources/app/SOURCE_RECOVERY_MANIFEST.json')){
+            if(!(Test-Path (Join-Path $check $relative))){ throw "portable member missing: $relative" }
+          }
+          $main = Get-Content (Join-Path $check 'resources/app/main.js') -Raw
+          if($main -notmatch 'process\.env\.LOCALAPPDATA' -or $main -match "getPath\('localAppData'\)"){ throw 'portable startup hotfix verification failed' }
+          if(Get-ChildItem $check -Recurse -Filter '*.ttf' -ErrorAction SilentlyContinue){ throw 'portable package contains a private font binary' }
+
+      - name: Create immutable hotfix candidate manifests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item candidate,runtime-candidate -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item candidate,runtime-candidate -ItemType Directory -Force | Out-Null
+          Copy-Item "dist/$env:SETUP_NAME","dist/$env:PORTABLE_NAME","dist/$env:SOURCE_NAME" candidate
+          Copy-Item runtime runtime-candidate/win-unpacked -Recurse -Force
+          Copy-Item "dist/$env:SETUP_NAME" runtime-candidate
+          Copy-Item source/desktop-contract-hotfix.log candidate
+          Copy-Item hotfix-context.json candidate
+          Copy-Item source/SOURCE_RECOVERY_MANIFEST.json candidate
+
+          $readme = @'
+          PlanJoy R7.3 — Windows Final Hotfix Delivery / تحویل نهایی اصلاح‌شده ویندوز
+
+          Setup: PlanJoyR73-Windows-Setup-x64-v0.7.3.exe
+          Portable: PlanJoyR73-Windows-x64-v0.7.3-Portable.zip
+
+          The setup is current-user only, installs under %LOCALAPPDATA%\Programs\PlanJoy,
+          and does not request Administrator elevation. Planner data remains under
+          %LOCALAPPDATA%\PlanJoyR1 during upgrade and uninstall.
+
+          این نصب فقط برای کاربر فعلی است، دسترسی Administrator درخواست نمی‌کند و
+          داده‌های برنامه هنگام بروزرسانی و حذف حفظ می‌شوند.
+
+          Production binaries are not commercially Authenticode-signed and Windows SmartScreen
+          may display an Unknown Publisher warning. Verify SHA256SUMS.txt before installation.
+          '@
+          Set-Content candidate/README-FIRST.txt $readme -Encoding UTF8
+          Set-Content candidate/UNSIGNED-RELEASE-NOTICE.txt 'Unsigned production artifact. A disposable self-signed Authenticode pipeline is tested separately and never modifies the delivered binaries.' -Encoding UTF8
+
+          $names = @($env:SETUP_NAME,$env:PORTABLE_NAME,$env:SOURCE_NAME)
+          $entries = foreach($name in $names){
+            $path = Join-Path candidate $name
+            [ordered]@{
+              name = $name
+              size = (Get-Item $path).Length
+              sha256 = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          [ordered]@{
+            format = 'PlanJoy-R73-Windows-hotfix-build-manifest-v3'
+            version = $env:VERSION
+            base_run_id = $env:BASE_RUN_ID
+            base_commit = $env:BASE_COMMIT
+            hotfix_run_id = $env:GITHUB_RUN_ID
+            hotfix_commit = $env:GITHUB_SHA
+            hotfix = 'R73-WIN-LOCALAPPDATA-STARTUP'
+            architecture = 'x64'
+            installer_scope = 'current-user'
+            requested_execution_level = 'asInvoker'
+            production_authenticode_status = 'unsigned'
+            private_font_binaries_redistributed = $false
+            contract = 'DESKTOP_CONTRACT_PASS 69'
+            artifacts = @($entries)
+          } | ConvertTo-Json -Depth 8 | Set-Content candidate/BUILD-MANIFEST.json -Encoding UTF8
+          ($entries | ForEach-Object { "$($_.sha256)  $($_.name)" }) | Set-Content candidate/SHA256SUMS.txt -Encoding ascii
+          Get-ChildItem candidate | Select-Object Name,Length | Format-Table | Out-String | Set-Content candidate/CANDIDATE-FILE-LIST.txt -Encoding UTF8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-hotfix-delivery-candidate-v3
+          path: candidate/**
+          retention-days: 14
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-hotfix-runtime-candidate-v3
+          path: runtime-candidate/**
+          retention-days: 14
+          if-no-files-found: error
+
+  runtime:
+    name: Hotfix runtime certification (${{ matrix.os }})
+    needs: hotfix
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-hotfix-runtime-candidate-v3
+          path: runtime-candidate
+
+      - name: Locate and verify rebuilt candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = (Get-ChildItem runtime-candidate -Recurse -Filter PlanJoy.exe | Where-Object { $_.FullName -match 'win-unpacked' } | Select-Object -First 1).FullName
+          $setup = (Get-ChildItem runtime-candidate -Recurse -Filter $env:SETUP_NAME | Select-Object -First 1).FullName
+          if(!$app -or !$setup){ throw 'rebuilt runtime candidate files are missing' }
+          if((Get-Item $app).Length -lt 50MB -or (Get-Item $setup).Length -lt 60MB){ throw 'rebuilt candidate is incomplete' }
+          "APP=$app" >> $env:GITHUB_ENV
+          "SETUP=$setup" >> $env:GITHUB_ENV
+          $main = Get-Content (Join-Path (Split-Path $app) 'resources/app/main.js') -Raw
+          if($main -notmatch 'process\.env\.LOCALAPPDATA' -or $main -match "getPath\('localAppData'\)"){ throw 'rebuilt runtime does not contain the startup hotfix' }
+          Get-FileHash $app,$setup -Algorithm SHA256 | Format-Table | Out-String | Set-Content "candidate-hashes-${{ matrix.os }}.txt" -Encoding UTF8
+
+      - name: Direct application launch and SQLite initialization (three passes)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Stop-PlanJoy {
+            Get-Process PlanJoy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 800
+          }
+          Stop-PlanJoy
+          $dataDir = Join-Path $env:LOCALAPPDATA 'PlanJoyR1'
+          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+          $measurements = @()
+          foreach($pass in 1..3){
+            $logPath = Join-Path $env:RUNNER_TEMP "planjoy-direct-${pass}.log"
+            $process = Start-Process -FilePath $env:APP -ArgumentList @('--disable-gpu','--enable-logging=file',"--log-file=$logPath") -PassThru
+            Start-Sleep -Seconds 9
+            if($process.HasExited){
+              $log = if(Test-Path $logPath){ Get-Content $logPath -Raw } else { '<no Electron log>' }
+              throw "direct application exited early on pass ${pass} with code $($process.ExitCode). Log: $log"
+            }
+            $live = Get-Process -Id $process.Id -ErrorAction Stop
+            if($live.WorkingSet64 -gt 1400MB){ throw "working set too high on pass ${pass}: $($live.WorkingSet64)" }
+            $measurements += [ordered]@{ pass=$pass; pid=$live.Id; working_set=$live.WorkingSet64; private_memory=$live.PrivateMemorySize64 }
+            Stop-PlanJoy
+          }
+          $db = Join-Path $dataDir 'planjoy_desktop_r73.db'
+          if(!(Test-Path $db)){ throw 'desktop SQLite database was not initialized after the startup hotfix' }
+          if((Get-Item $db).Length -lt 4096){ throw "desktop SQLite database is unexpectedly small: $((Get-Item $db).Length)" }
+          $measurements | ConvertTo-Json -Depth 4 | Set-Content "direct-launch-measurements-${{ matrix.os }}.json" -Encoding UTF8
+
+      - name: Install, register, launch, upgrade and uninstall without elevation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Stop-PlanJoy {
+            Get-Process PlanJoy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 900
+          }
+          Stop-PlanJoy
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs/PlanJoy'
+          $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlanJoy'
+          $protocolRoot = 'HKCU:\Software\Classes\planjoy'
+          $protocolKey = 'HKCU:\Software\Classes\planjoy\shell\open\command'
+          $startLink = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/PlanJoy.lnk'
+          $desktopDir = Join-Path $env:USERPROFILE 'Desktop'
+          $desktopLink = Join-Path $desktopDir 'PlanJoy.lnk'
+          New-Item $desktopDir -ItemType Directory -Force | Out-Null
+          Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $protocolRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $startLink,$desktopLink -Force -ErrorAction SilentlyContinue
+
+          $install = Start-Process -FilePath $env:SETUP -ArgumentList @('--silent','--no-launch') -Wait -PassThru
+          if($install.ExitCode -ne 0){ throw "installer failed with exit code $($install.ExitCode)" }
+          $installed = Join-Path $installDir 'PlanJoy.exe'
+          $uninstaller = Join-Path $installDir 'PlanJoyUninstall.exe'
+          foreach($required in @($installed,$uninstaller,(Join-Path $installDir 'resources/app/main.js'),(Join-Path $installDir 'resources/app/preload.js'),(Join-Path $installDir 'resources/app/renderer/app.js'))){
+            if(!(Test-Path $required)){ throw "installed member missing: $required" }
+          }
+          if(!(Test-Path $uninstallKey)){ throw 'Apps & Features registration missing' }
+          $registration = Get-ItemProperty $uninstallKey
+          if($registration.DisplayVersion -ne $env:VERSION){ throw "installed version mismatch: $($registration.DisplayVersion)" }
+          if($registration.InstallLocation -ne $installDir){ throw "current-user install location mismatch: $($registration.InstallLocation)" }
+          if(!(Test-Path $protocolKey)){ throw 'planjoy:// protocol registration missing' }
+          if(!(Test-Path $startLink)){ throw 'Start Menu shortcut missing' }
+          if(!(Test-Path $desktopLink)){ throw 'Desktop shortcut missing' }
+
+          $installedLog = Join-Path $env:RUNNER_TEMP 'planjoy-installed.log'
+          $process = Start-Process -FilePath $installed -ArgumentList @('--disable-gpu','--enable-logging=file',"--log-file=$installedLog") -PassThru
+          Start-Sleep -Seconds 9
+          if($process.HasExited){
+            $log = if(Test-Path $installedLog){ Get-Content $installedLog -Raw } else { '<no Electron log>' }
+            throw "installed app exited early with code $($process.ExitCode). Log: $log"
+          }
+          $installedWorkingSet = (Get-Process -Id $process.Id -ErrorAction Stop).WorkingSet64
+          Start-Process 'planjoy://today'
+          Start-Sleep -Seconds 4
+          if(!(Get-Process PlanJoy -ErrorAction SilentlyContinue)){ throw 'registered protocol did not route to the application' }
+          Stop-PlanJoy
+
+          $dataDir = Join-Path $env:LOCALAPPDATA 'PlanJoyR1'
+          $db = Join-Path $dataDir 'planjoy_desktop_r73.db'
+          if(!(Test-Path $db)){ throw 'installed application did not initialize its SQLite database' }
+          $sentinel = Join-Path $dataDir 'preserve-r73-ci.txt'
+          Set-Content $sentinel 'keep-user-data-across-upgrade-and-uninstall' -Encoding UTF8
+          $upgrade = Start-Process -FilePath $env:SETUP -ArgumentList @('--silent','--no-launch') -Wait -PassThru
+          if($upgrade.ExitCode -ne 0){ throw "upgrade/reinstall failed with code $($upgrade.ExitCode)" }
+          if(!(Test-Path $sentinel)){ throw 'upgrade deleted user data' }
+          if((Get-ItemProperty $uninstallKey).DisplayVersion -ne $env:VERSION){ throw 'upgrade registration failed' }
+
+          $remove = Start-Process -FilePath $uninstaller -ArgumentList @('--uninstall','--silent') -Wait -PassThru
+          if($remove.ExitCode -ne 0){ throw "uninstall failed with code $($remove.ExitCode)" }
+          Stop-PlanJoy
+          foreach($attempt in 1..30){ if(!(Test-Path $installDir)){ break }; Start-Sleep -Seconds 1 }
+          if(Test-Path $installDir){ throw 'program directory remained after uninstall timeout' }
+          if(Test-Path $uninstallKey){ throw 'uninstall registry entry remained' }
+          if(Test-Path $protocolRoot){ throw 'protocol registration remained after uninstall' }
+          if(Test-Path $startLink){ throw 'Start Menu shortcut remained after uninstall' }
+          if(Test-Path $desktopLink){ throw 'Desktop shortcut remained after uninstall' }
+          if(!(Test-Path $sentinel)){ throw 'uninstall deleted user data' }
+
+          [ordered]@{
+            installer_exit = $install.ExitCode
+            upgrade_exit = $upgrade.ExitCode
+            uninstall_exit = $remove.ExitCode
+            installed_working_set = $installedWorkingSet
+            install_location = $installDir
+            sqlite_initialized = $true
+            data_preserved = $true
+            protocol_verified = $true
+            shortcuts_verified = $true
+          } | ConvertTo-Json -Depth 5 | Set-Content "install-lifecycle-${{ matrix.os }}.json" -Encoding UTF8
+
+      - name: Verify disposable Authenticode signing pipeline without modifying release files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $copy = Join-Path $env:RUNNER_TEMP 'PlanJoyR73-disposable-signed-ci.exe'
+          Copy-Item $env:SETUP $copy -Force
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=PlanJoy R7.3 Disposable CI' -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable -HashAlgorithm SHA256 -NotAfter (Get-Date).AddDays(1)
+          $root = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','CurrentUser')
+          $trusted = New-Object System.Security.Cryptography.X509Certificates.X509Store('TrustedPublisher','CurrentUser')
+          try {
+            $root.Open('ReadWrite'); $root.Add($cert)
+            $trusted.Open('ReadWrite'); $trusted.Add($cert)
+            $signature = Set-AuthenticodeSignature -FilePath $copy -Certificate $cert -HashAlgorithm SHA256
+            if($signature.Status -ne 'Valid'){ throw "disposable Authenticode pipeline failed: $($signature.Status)" }
+            [ordered]@{ status=$signature.Status.ToString(); signer=$cert.Subject; thumbprint=$cert.Thumbprint; release_files_modified=$false } | ConvertTo-Json | Set-Content "authenticode-pipeline-${{ matrix.os }}.json" -Encoding UTF8
+          } finally {
+            try { $root.Remove($cert) } catch {}
+            try { $trusted.Remove($cert) } catch {}
+            try { $root.Close() } catch {}
+            try { $trusted.Close() } catch {}
+            Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Produce runtime certification receipt
+        shell: pwsh
+        run: |
+          $computer = Get-ComputerInfo
+          [ordered]@{
+            format = 'PlanJoy-R73-runtime-certification-v3'
+            matrix_label = '${{ matrix.os }}'
+            windows_product = $computer.WindowsProductName
+            windows_version = $computer.WindowsVersion
+            os_build = $computer.OsBuildNumber
+            architecture = $env:PROCESSOR_ARCHITECTURE
+            base_run_id = $env:BASE_RUN_ID
+            base_commit = $env:BASE_COMMIT
+            hotfix_run_id = $env:GITHUB_RUN_ID
+            hotfix_commit = $env:GITHUB_SHA
+            hotfix = 'R73-WIN-LOCALAPPDATA-STARTUP'
+            direct_launch_passes = 3
+            sqlite_initialized = $true
+            current_user_install = $true
+            elevation_requested = $false
+            protocol_live_test = $true
+            upgrade_preserved_data = $true
+            uninstall_preserved_data = $true
+            disposable_authenticode_pipeline = 'Valid'
+            production_artifact_signed = $false
+          } | ConvertTo-Json -Depth 6 | Set-Content "runtime-certification-${{ matrix.os }}.json" -Encoding UTF8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-hotfix-runtime-receipt-v3-${{ matrix.os }}
+          path: |
+            candidate-hashes-${{ matrix.os }}.txt
+            direct-launch-measurements-${{ matrix.os }}.json
+            install-lifecycle-${{ matrix.os }}.json
+            authenticode-pipeline-${{ matrix.os }}.json
+            runtime-certification-${{ matrix.os }}.json
+          retention-days: 14
+          if-no-files-found: error
+
+  certify:
+    name: Assemble final certified Windows delivery v3
+    needs: [hotfix, runtime]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-hotfix-delivery-candidate-v3
+          path: candidate
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: planjoy-r73-hotfix-runtime-receipt-v3-*
+          path: runtime-receipts
+          merge-multiple: true
+
+      - name: Verify artifacts and both Windows runtime receipts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          (cd candidate && sha256sum -c SHA256SUMS.txt)
+          grep -q '^DESKTOP_CONTRACT_PASS 69$' candidate/desktop-contract-hotfix.log
+          test -f runtime-receipts/runtime-certification-windows-2022.json
+          test -f runtime-receipts/runtime-certification-windows-2025.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          for name in ('windows-2022','windows-2025'):
+              r=json.loads(Path(f'runtime-receipts/runtime-certification-{name}.json').read_text(encoding='utf-8-sig'))
+              assert r['hotfix']=='R73-WIN-LOCALAPPDATA-STARTUP'
+              assert r['direct_launch_passes']==3
+              assert r['sqlite_initialized'] is True
+              assert r['current_user_install'] is True
+              assert r['elevation_requested'] is False
+              assert r['protocol_live_test'] is True
+              assert r['upgrade_preserved_data'] is True
+              assert r['uninstall_preserved_data'] is True
+              assert r['disposable_authenticode_pipeline']=='Valid'
+              assert r['production_artifact_signed'] is False
+          print('PLANJOY_R73_HOTFIX_RUNTIME_MATRIX_CERTIFIED')
+          PY
+
+      - name: Assemble combined package and final manifests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf final-stage final-output
+          mkdir -p final-stage/runtime-certification final-output/runtime-certification
+          cp candidate/* final-stage/
+          cp runtime-receipts/* final-stage/runtime-certification/
+          cp runtime-receipts/* final-output/runtime-certification/
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+          candidate=Path('candidate')
+          runtime=Path('runtime-receipts')
+          build=json.loads((candidate/'BUILD-MANIFEST.json').read_text(encoding='utf-8-sig'))
+          receipts=[json.loads(p.read_text(encoding='utf-8-sig')) for p in sorted(runtime.glob('runtime-certification-*.json'))]
+          receipt={
+            'format':'PlanJoy-R73-final-certification-v3',
+            'version':'0.7.3',
+            'base_run_id':os.environ['BASE_RUN_ID'],
+            'base_commit':os.environ['BASE_COMMIT'],
+            'hotfix_run_id':os.environ['GITHUB_RUN_ID'],
+            'hotfix_commit':os.environ['GITHUB_SHA'],
+            'hotfix':'R73-WIN-LOCALAPPDATA-STARTUP',
+            'build_manifest':build,
+            'runtime_matrix':receipts,
+            'certified':True,
+            'production_authenticode_status':'unsigned',
+            'note':'Disposable self-signed Authenticode validation passed on both Windows runners; delivered binaries remain unsigned and were not modified by that test.'
+          }
+          Path('final-stage/CERTIFICATION-RECEIPT.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+          (cd final-stage && zip -9 -r "../final-output/$FINAL_NAME" .)
+          cp "candidate/$SETUP_NAME" "candidate/$PORTABLE_NAME" "candidate/$SOURCE_NAME" final-output/
+          cp candidate/README-FIRST.txt candidate/BUILD-MANIFEST.json candidate/SHA256SUMS.txt candidate/UNSIGNED-RELEASE-NOTICE.txt candidate/SOURCE_RECOVERY_MANIFEST.json final-output/
+          cp final-stage/CERTIFICATION-RECEIPT.json final-output/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          out=Path('final-output')
+          files=[out/'PlanJoyR73-Windows-Setup-x64-v0.7.3.exe',out/'PlanJoyR73-Windows-x64-v0.7.3-Portable.zip',out/'PlanJoyR73-Source-v0.7.3.zip',out/'PlanJoyR73-Windows-Final-Delivery-v0.7.3.zip']
+          entries=[]
+          for p in files:
+              entries.append({'name':p.name,'size':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+          (out/'SHA256SUMS-ALL.txt').write_text(''.join(f"{x['sha256']}  {x['name']}\n" for x in entries),encoding='ascii')
+          (out/'FINAL-FILE-MANIFEST.json').write_text(json.dumps({'format':'PlanJoy-R73-final-file-manifest-v3','version':'0.7.3','files':entries},indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(entries,indent=2))
+          PY
+          find final-output -maxdepth 2 -type f -printf '%P|%s\n' | sort | tee final-output/FINAL-FILE-LIST.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-windows-final-certified-v3
+          path: final-output/**
+          retention-days: 14
+          if-no-files-found: error

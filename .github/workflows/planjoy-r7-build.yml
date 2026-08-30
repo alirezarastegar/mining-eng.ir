@@ -1,5 +1,7 @@
 name: PlanJoy R7 Android Build
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [tmp-planjoy-r7-build]
   workflow_dispatch:

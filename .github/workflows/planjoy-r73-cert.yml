@@ -24,8 +24,10 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cat planjoy-r73-ci/source/part*.b64 > r73-source.b64
-          base64 -d r73-source.b64 > r73-source.tar.gz
+          : > r73-source.tar.gz
+          for f in planjoy-r73-ci/source/part*.b64; do
+            base64 -d "$f" >> r73-source.tar.gz
+          done
           gzip -t r73-source.tar.gz
           mkdir work
           tar -xzf r73-source.tar.gz -C work
@@ -37,19 +39,14 @@ jobs:
           printf '#define PLANJOY_EMBED_FA_FONT 0\n' > "$ROOT/src/font_embed_config.h"
           mkdir -p "$ROOT/android_native/app/src/main/res/font"
           cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf "$ROOT/android_native/app/src/main/res/font/iransans_xv.ttf"
-      - name: Create disposable signed update manifest for CI
+      - name: Create disposable update manifest for CI
         shell: bash
         run: |
           set -euxo pipefail
           cd "$ROOT"
           mkdir -p build
           cp "$GITHUB_WORKSPACE/planjoy-r73-ci/update-channel-ci.json" build/PlanJoyR73-update.json
-          if [ -f release/update_public_ci.pem ]; then
-            openssl dgst -sha256 -sign release/update_private_ci.pem -out /tmp/update.sig build/PlanJoyR73-update.json
-            base64 -w0 /tmp/update.sig > build/PlanJoyR73-update.json.sig
-          else
-            printf 'CI_PLACEHOLDER' > build/PlanJoyR73-update.json.sig
-          fi
+          printf 'CI_PLACEHOLDER' > build/PlanJoyR73-update.json.sig
       - name: Build Windows certification bytes
         shell: bash
         run: |
@@ -101,6 +98,7 @@ jobs:
             ${{ env.ROOT }}/build/PlanJoyR73-update.json
             ${{ env.ROOT }}/build/PlanJoyR73-update.json.sig
             ${{ env.ROOT }}/android_native/app/build/outputs/apk/production/debug/app-production-debug.apk
+            ${{ env.ROOT }}/android_native/app/build/outputs/apk/production/release/app-production-release-unsigned.apk
             ${{ env.ROOT }}/android_native/app/build/reports/lint-results-productionDebug.txt
           retention-days: 3
 
@@ -129,10 +127,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          foreach($dpi in 96,120,144,192){
+          foreach($pass in 96,120,144,192){
             $p=Start-Process $env:APP -PassThru
             Start-Sleep -Milliseconds 1800
-            if($p.HasExited){throw "Windows app exited early at DPI-cert pass $dpi, exit=$($p.ExitCode)"}
+            if($p.HasExited){throw "Windows app exited early at certification pass $pass, exit=$($p.ExitCode)"}
             $proc=Get-Process -Id $p.Id
             if($proc.WorkingSet64 -gt 600MB){throw "working set too high: $($proc.WorkingSet64)"}
             Stop-Process -Id $p.Id -Force

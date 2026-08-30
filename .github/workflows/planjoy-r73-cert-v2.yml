@@ -27,15 +27,18 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import base64,re
-          out=bytearray()
+          chunks=[]
           for p in sorted(Path('planjoy-r73-ci/source').glob('part*.b64')):
               raw=p.read_text(errors='ignore')
+              raw=re.sub(r'\\?\s*No newline at end of file\s*$', '', raw)
               clean=re.sub(r'[^A-Za-z0-9+/=]','',raw)
-              print(p.name,'raw',len(raw),'clean',len(clean),'removed',len(raw)-len(clean))
-              clean += '='*((-len(clean))%4)
-              out.extend(base64.b64decode(clean,validate=False))
-          Path('r73-source.tar.gz').write_bytes(out)
-          print('decoded bytes',len(out),out[:8])
+              print(p.name,'raw',len(raw),'clean',len(clean),'tail',repr(raw[-32:]))
+              chunks.append(clean)
+          encoded=''.join(chunks)
+          encoded += '='*((-len(encoded))%4)
+          data=base64.b64decode(encoded,validate=False)
+          Path('r73-source.tar.gz').write_bytes(data)
+          print('encoded',len(encoded),'decoded',len(data),data[:8])
           PY
           gzip -t r73-source.tar.gz
           mkdir work

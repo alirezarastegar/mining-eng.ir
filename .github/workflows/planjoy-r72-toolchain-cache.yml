@@ -34,6 +34,10 @@ jobs:
               id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
           }
           EOF
+          cat > android_native/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+          org.gradle.workers.max=2
+          EOF
           cat > android_native/app/build.gradle.kts <<'EOF'
           plugins {
               id("com.android.application")
@@ -76,12 +80,12 @@ jobs:
           import androidx.activity.ComponentActivity
           import androidx.activity.compose.setContent
           import androidx.compose.material3.Text
-          class MainActivity: ComponentActivity(){ override fun onCreate(b: Bundle?){ super.onCreate(b); setContent { Text("PlanJoy R7.2 cache") } } }
+          class MainActivity: ComponentActivity(){ override fun onCreate(savedInstanceState: Bundle?){ super.onCreate(savedInstanceState); setContent { Text("PlanJoy R7.2 cache") } } }
           EOF
-      - name: Resolve exact R7.2 Android and Compose dependencies
+      - name: Resolve exact R7.2 Android and Compose dependencies without dex merge
         working-directory: android_native
         run: |
-          gradle --no-daemon --stacktrace :app:assembleProductionDebug :app:assembleProductionRelease :app:assembleCleanTestDebug :app:lintProductionDebug
+          gradle --no-daemon --stacktrace :app:compileProductionDebugKotlin :app:compileProductionReleaseKotlin :app:processProductionDebugResources :app:processProductionReleaseResources :app:lintProductionDebug
       - name: Package offline build toolchain
         shell: bash
         run: |

@@ -1,0 +1,1 @@
+Retry final professional Windows installer build after all v3 source fragments were restored.

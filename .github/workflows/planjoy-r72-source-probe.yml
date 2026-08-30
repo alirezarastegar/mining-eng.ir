@@ -1,0 +1,22 @@
+name: PlanJoy R7.2 Source Probe for R7.3
+on:
+  push:
+    branches: [tmp-planjoy-r73-ci]
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct R7.2 source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat planjoy-r72-ci/chunk*.b64 > r72-source.b64
+          base64 -d r72-source.b64 > r72-source.tar.gz
+          gzip -t r72-source.tar.gz
+          mkdir src72
+          tar -xzf r72-source.tar.gz -C src72
+          find src72 -maxdepth 2 -type f | head -30
+          test -n "$(find src72 -type f -name AppUi.kt -print -quit)"
+          sha256sum r72-source.tar.gz

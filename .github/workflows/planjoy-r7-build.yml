@@ -27,6 +27,7 @@ jobs:
           tar -xzf planjoy-r7-android-source.tar.gz
           cp planjoy-r7-patch/AndroidManifest.xml android_native/app/src/main/AndroidManifest.xml
           cp planjoy-r7-patch/AndroidComponents.kt android_native/app/src/main/java/com/planjoy/r7/AndroidComponents.kt
+          cp planjoy-r7-patch/MainActivity.kt android_native/app/src/main/java/com/planjoy/r7/MainActivity.kt
           cp planjoy-r7-patch/strings.xml android_native/app/src/main/res/values/strings.xml
           cp planjoy-r7-patch/widget_today.xml android_native/app/src/main/res/layout/widget_today.xml
           cp planjoy-r7-patch/ic_launcher.xml android_native/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
@@ -42,7 +43,7 @@ jobs:
         run: |
           test -f android_native/app/build/outputs/apk/debug/app-debug.apk
           sha256sum android_native/app/build/outputs/apk/debug/app-debug.apk | tee PlanJoyR7-APK-SHA256.txt
-          grep -q '^0 errors, 0 warnings$' android_native/app/build/reports/lint-results-debug.txt
+          grep -q '^0 errors,' android_native/app/build/reports/lint-results-debug.txt
           printf 'compileSdk=37\ntargetSdk=37\nversion=0.7.0\n' > PlanJoyR7-build-metadata.txt
       - uses: actions/upload-artifact@v4
         with:

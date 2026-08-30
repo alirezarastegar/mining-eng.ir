@@ -100,6 +100,13 @@ def main() -> int:
 
     shutil.copyfile(preload_source, root / "preload.js")
 
+    package_path = root / "package.json"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    build_files = package.setdefault("build", {}).setdefault("files", [])
+    if "SOURCE_RECOVERY_MANIFEST.json" not in build_files:
+        build_files.append("SOURCE_RECOVERY_MANIFEST.json")
+    package_path.write_text(json.dumps(package, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+
     css_path = root / "renderer/app.css"
     css = css_path.read_text(encoding="utf-8")
     css = replace_once(
@@ -164,6 +171,12 @@ def main() -> int:
         "zip.NewReader(bytes.NewReader(raw),int64(len(raw)))",
         "binary ZIP reader",
     )
+    installer = replace_once(
+        installer,
+        'if desktop:=filepath.Join(os.Getenv("USERPROFILE"),"Desktop");os.Getenv("USERPROFILE")!=""{_ = shortcut(filepath.Join(desktop,"PlanJoy.lnk"),appPath,dir,appPath)}',
+        'if desktop:=filepath.Join(os.Getenv("USERPROFILE"),"Desktop");os.Getenv("USERPROFILE")!=""{_ = os.MkdirAll(desktop,0755);_ = shortcut(filepath.Join(desktop,"PlanJoy.lnk"),appPath,dir,appPath)}',
+        "Desktop shortcut directory",
+    )
     installer_path.write_text(installer, encoding="utf-8", newline="\n")
 
     private_font = root / "assets/fonts/IRANSansXVF.ttf"
@@ -171,6 +184,10 @@ def main() -> int:
         private_font.unlink()
     fonts_dir = root / "assets/fonts"
     fonts_dir.mkdir(parents=True, exist_ok=True)
+    for obsolete_note in ("CI_FONT_NOTE.txt", "README_PRIVATE_FONT.txt"):
+        note = fonts_dir / obsolete_note
+        if note.exists():
+            note.unlink()
     (fonts_dir / "SYSTEM_FONT_POLICY.txt").write_text(
         "PlanJoy R7.3 does not redistribute private font binaries.\n"
         "English uses Segoe UI; Persian uses Tahoma/Segoe UI system fallbacks.\n",

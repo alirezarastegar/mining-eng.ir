@@ -1,0 +1,64 @@
+name: PlanJoy R7.3 V3 Source Salvage Probe
+
+on:
+  push:
+    branches: [tmp-planjoy-r73-final-delivery]
+  workflow_dispatch:
+
+jobs:
+  salvage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Reconstruct and salvage all intact files from the v3 source archive
+        shell: bash
+        run: |
+          set -uxo pipefail
+          rm -rf desktop recovered && mkdir desktop recovered
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib
+          root=Path('planjoy-r73-desktop-v3')
+          order=['part00.b64','part01.b64','part02.b64','tail50.b64','miss00.b64','miss01.b64','miss02.b64','miss03.b64','gap03.b64','miss04.b64','miss05.b64','miss06.b64','gap-last.b64']
+          cur={n:(root/n).read_text().strip() for n in order}
+          cur['tail50.b64']=''.join((root/'correct'/n).read_text().strip() for n in ['tail50-00.b64','tail50-01.b64','tail50-02.b64'])
+          text=''.join(cur[n] for n in order)
+          print('b64_length',len(text),'equals',[i for i,c in enumerate(text) if c=='='])
+          # The second interior padding byte was identified by the historical
+          # transport probe. Keep final '=' padding intact.
+          if len(text)==200124 and text[190790]=='=':
+              text=text[:190790]+'N'+text[190791:]
+          raw=base64.b64decode(text, validate=True)
+          Path('recovered/v3.tar.xz').write_bytes(raw)
+          print('archive_length',len(raw),'sha256',hashlib.sha256(raw).hexdigest())
+          PY
+          tar -xJvf recovered/v3.tar.xz -C desktop > recovered/tar.stdout 2> recovered/tar.stderr || true
+          echo '=== TAR STDERR ==='; cat recovered/tar.stderr
+          echo '=== FILES ==='; find desktop -type f -printf '%P|%s\n' | sort | tee recovered/files.txt
+          echo '=== SOURCE HEADERS ==='
+          for f in package.json main.js preload.js renderer/app.js renderer/app.css renderer/index.html tests/desktop_contract_test.js installer/main.go; do
+            echo "--- $f ---"
+            if [ -f "desktop/$f" ]; then wc -c "desktop/$f"; sha256sum "desktop/$f"; head -5 "desktop/$f"; else echo MISSING; fi
+          done
+          echo '=== SYNTAX ==='
+          node --check desktop/main.js || true
+          node --check desktop/preload.js || true
+          node --check desktop/renderer/app.js || true
+          echo '=== CONTRACT ==='
+          (cd desktop && node tests/desktop_contract_test.js) || true
+          echo '=== PACKAGE ==='
+          node -e "const p=require('./desktop/package.json'); console.log(JSON.stringify(p,null,2))" || true
+          echo '=== PATCH MARKERS ==='
+          grep -nE 'singleInstanceLock|open-url|planjoy|appVersion|DESKTOP_CONTRACT_PASS|contextIsolation|nodeIntegration' desktop/main.js desktop/package.json desktop/renderer/app.js desktop/tests/desktop_contract_test.js 2>/dev/null || true
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-v3-salvaged-source
+          path: |
+            desktop/**
+            recovered/**
+          retention-days: 3

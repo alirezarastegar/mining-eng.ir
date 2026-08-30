@@ -1,0 +1,36 @@
+name: PlanJoy R7.3 Desktop Chunk Probe
+on:
+  push:
+    branches: [tmp-planjoy-r73-desktop-ci]
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect reconstructed source chunks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $parts=@(
+            'planjoy-r73-desktop-v3/part00.b64','planjoy-r73-desktop-v3/part01.b64','planjoy-r73-desktop-v3/part02.b64','planjoy-r73-desktop-v3/tail50.b64',
+            'planjoy-r73-desktop-v3/miss00.b64','planjoy-r73-desktop-v3/miss01.b64','planjoy-r73-desktop-v3/miss02.b64','planjoy-r73-desktop-v3/miss03.b64','planjoy-r73-desktop-v3/gap03.b64',
+            'planjoy-r73-desktop-v3/miss04.b64','planjoy-r73-desktop-v3/miss05.b64','planjoy-r73-desktop-v3/miss06.b64','planjoy-r73-desktop-v3/gap-last.b64'
+          )
+          $all='';$offset=0
+          foreach($p in $parts){
+            $raw=(Get-Content $p -Raw).Trim()
+            $bad=@()
+            for($i=0;$i -lt $raw.Length;$i++){
+              $c=$raw[$i]
+              if(!($c -match '[A-Za-z0-9+/=]')){$bad += "local=$i global=$($offset+$i) code=$([int][char]$c) char=[$c]"}
+            }
+            Write-Host "$p length=$($raw.Length) offset=$offset bad=$($bad.Count)"
+            $bad | ForEach-Object {Write-Host $_}
+            $all += $raw;$offset += $raw.Length
+          }
+          Write-Host "TOTAL=$($all.Length)"
+          $clean=[regex]::Replace($all,'[^A-Za-z0-9+/=]','')
+          Write-Host "CLEAN=$($clean.Length)"
+          try{[void][Convert]::FromBase64String($all);Write-Host 'RAW_DECODE=PASS'}catch{Write-Host "RAW_DECODE=FAIL $($_.Exception.Message)"}
+          try{[void][Convert]::FromBase64String($clean);Write-Host 'CLEAN_DECODE=PASS'}catch{Write-Host "CLEAN_DECODE=FAIL $($_.Exception.Message)"}

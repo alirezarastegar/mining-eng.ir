@@ -1,0 +1,122 @@
+name: PlanJoy R7.1.3 Full Android Build
+on:
+  push:
+    branches: [tmp-planjoy-r713-parity]
+  workflow_dispatch:
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Reconstruct qualified R7.1 Android base
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git fetch --depth=1 origin tmp-planjoy-r7-build
+          git checkout FETCH_HEAD -- planjoy-r7-source
+          cat planjoy-r7-source/chunk*.b64 > planjoy-r7-source/source.b64
+          base64 -d planjoy-r7-source/source.b64 > planjoy-r7-base.tar.gz
+          echo '36dd8324b4d54e3dcacff3a6d28e2b6bb6153efcf54e337c99226cf1fdeadf11  planjoy-r7-base.tar.gz' | sha256sum -c -
+          tar -xzf planjoy-r7-base.tar.gz
+          git fetch --depth=1 origin tmp-planjoy-ux-ci
+          git checkout FETCH_HEAD -- planjoy-r71-ux
+          cat planjoy-r71-ux/patch_chunks/chunk*.b64 > planjoy-r71-ux/patch-full.b64
+          base64 -d planjoy-r71-ux/patch-full.b64 > planjoy-r71-ux/patch.tar.gz
+          echo '2e0a60663c32d9d86b7a7f9437d86627b073df70a1a03263e1156648b809b219  planjoy-r71-ux/patch.tar.gz' | sha256sum -c -
+          tar -xzf planjoy-r71-ux/patch.tar.gz
+          base64 -d planjoy-r71-ux/overlay-final.tar.gz.b64 > planjoy-r71-ux/overlay-final.tar.gz
+          echo 'edbe3843237b516153f1eb475d4f6846bf8bc82c59df69e2ff1bdf158b6985b5  planjoy-r71-ux/overlay-final.tar.gz' | sha256sum -c -
+          tar -xzf planjoy-r71-ux/overlay-final.tar.gz
+          mkdir -p android_native/app/src/main/res/font
+          base64 -d planjoy-r71-ux/font-placeholder.ttf.b64 > android_native/app/src/main/res/font/iransans_xv.ttf
+          test -f android_native/app/src/main/java/com/planjoy/r7/AppUi.kt
+      - name: Install R7.1.3 experience-parity layer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cp planjoy-r713-gen/R713MainActivity.kt android_native/app/src/main/java/com/planjoy/r7/R713MainActivity.kt
+          cp planjoy-r713-gen/R713Widgets.kt android_native/app/src/main/java/com/planjoy/r7/R713Widgets.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          app=Path('android_native/app/src/main/java/com/planjoy/r7/R713MainActivity.kt')
+          s=app.read_text()
+          s=s.replace('import androidx.compose.ui.res.fontResource','import androidx.compose.ui.text.font.Font')
+          s=s.replace('    val faFont = runCatching { fontResource(R.font.iransans_xv) }.getOrNull()\n    val family = if (fa && faFont != null) FontFamily(faFont) else FontFamily.Default', '    val family = if (fa) FontFamily(Font(R.font.iransans_xv)) else FontFamily.Default')
+          app.write_text(s)
+          for g in [Path('android_native/app/build.gradle.kts'),Path('android_native/app/build.gradle')]:
+              if not g.exists(): continue
+              s=g.read_text()
+              s=re.sub(r'applicationId\s*[= ]\s*["\']com\.planjoy\.r7["\']', 'applicationId = "app.planjoy.local"', s)
+              s=re.sub(r'versionCode\s*[= ]\s*\d+', 'versionCode = 71303', s)
+              s=re.sub(r'versionName\s*[= ]\s*["\'][^"\']+["\']', 'versionName = "0.7.1.3"', s)
+              g.write_text(s)
+          m=Path('android_native/app/src/main/AndroidManifest.xml')
+          s=m.read_text()
+          s=s.replace('<category android:name="android.intent.category.LAUNCHER" />','')
+          inject='''\n        <activity android:name=".R713MainActivity" android:exported="true" android:screenOrientation="unspecified">\n            <intent-filter>\n                <action android:name="android.intent.action.MAIN" />\n                <category android:name="android.intent.category.LAUNCHER" />\n            </intent-filter>\n        </activity>\n        <receiver android:name=".R713TodayWidget" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/r713_widget_today_info" /></receiver>\n        <receiver android:name=".R713FocusWidget" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/r713_widget_focus_info" /></receiver>\n        <receiver android:name=".R713GoalWidget" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/r713_widget_goal_info" /></receiver>\n'''
+          s=s.replace('</application>',inject+'    </application>')
+          m.write_text(s)
+          PY
+          mkdir -p android_native/app/src/main/res/layout android_native/app/src/main/res/xml android_native/app/src/main/res/drawable android_native/app/src/main/res/raw
+          cat > android_native/app/src/main/res/drawable/r713_widget_bg.xml <<'EOF'
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#FFF8F2"/><corners android:radius="24dp"/><stroke android:width="1dp" android:color="#F0D8C9"/><padding android:left="16dp" android:top="14dp" android:right="16dp" android:bottom="14dp"/></shape>
+          EOF
+          for n in today focus goal; do cat > android_native/app/src/main/res/layout/r713_widget_${n}.xml <<'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center_vertical" android:padding="16dp" android:background="@drawable/r713_widget_bg"><TextView android:id="@+id/widget_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="PlanJoy" android:textSize="13sp" android:textStyle="bold" android:textColor="#3A2D29"/><TextView android:id="@+id/widget_value" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="0" android:textSize="30sp" android:textStyle="bold" android:textColor="#E76F51"/><TextView android:id="@+id/widget_note" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="PlanJoy" android:textSize="11sp" android:textColor="#76635D"/></LinearLayout>
+          EOF
+          cat > android_native/app/src/main/res/xml/r713_widget_${n}_info.xml <<EOF
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="180dp" android:minHeight="100dp" android:updatePeriodMillis="1800000" android:initialLayout="@layout/r713_widget_${n}" android:resizeMode="horizontal|vertical" android:widgetCategory="home_screen" />
+          EOF
+          done
+          python3 - <<'PY'
+          import wave, math, struct
+          from pathlib import Path
+          root=Path('android_native/app/src/main/res/raw')
+          def tone(name, notes):
+              rate=22050; data=[]
+              for freq,dur,vol in notes:
+                  for i in range(int(rate*dur)):
+                      env=min(1,i/(rate*.015))*max(0,1-i/(rate*dur))
+                      data.append(int(32767*vol*env*math.sin(2*math.pi*freq*i/rate)))
+              with wave.open(str(root/name),'wb') as w:
+                  w.setnchannels(1);w.setsampwidth(2);w.setframerate(rate);w.writeframes(b''.join(struct.pack('<h',x) for x in data))
+          tone('soft_pop.wav',[(520,.12,.20),(660,.12,.14)])
+          tone('focus_start.wav',[(392,.18,.13),(523,.22,.12)])
+          tone('reward_chime.wav',[(523,.14,.14),(659,.16,.14),(784,.28,.13)])
+          PY
+      - name: Compile debug + release and lint
+        working-directory: android_native
+        run: |
+          gradle --no-daemon --stacktrace :app:assembleDebug :app:assembleRelease :app:lintDebug
+      - name: Verify APK contracts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DEBUG=$(find android_native/app/build/outputs/apk -name '*debug*.apk' | head -1)
+          RELEASE=$(find android_native/app/build/outputs/apk -name '*release*.apk' | head -1)
+          test -s "$DEBUG"; test -s "$RELEASE"
+          grep -R 'R7.1.3' android_native/app/src/main/java/com/planjoy/r7/R713MainActivity.kt
+          grep -R 'app.planjoy.local' android_native/app/build.gradle* || true
+          grep -R 'R713TodayWidget' android_native/app/src/main/AndroidManifest.xml
+          ! grep -q ' Error:' android_native/app/build/reports/lint-results-debug.txt
+          sha256sum "$DEBUG" "$RELEASE" | tee PlanJoyR713-APK-SHA256.txt
+          printf 'version=0.7.1.3\napplicationId=app.planjoy.local\nfont=CI-placeholder-private-font-injected-after-CI\nui=experience-parity-independent-assets\n' > PlanJoyR713-build-metadata.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoyR713-Android-full-feature
+          path: |
+            android_native/app/build/outputs/apk/
+            android_native/app/build/reports/lint-results-debug.html
+            android_native/app/build/reports/lint-results-debug.txt
+            PlanJoyR713-APK-SHA256.txt
+            PlanJoyR713-build-metadata.txt
+          retention-days: 3

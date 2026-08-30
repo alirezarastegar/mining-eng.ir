@@ -1,0 +1,634 @@
+name: PlanJoy R7.3 Certified Windows Final Delivery
+
+on:
+  push:
+    branches: [tmp-planjoy-r73-final-delivery]
+    paths:
+      - 'planjoy-r73-desktop-v3/**'
+      - 'planjoy-r73-final-source/**'
+      - '.github/workflows/planjoy-r73-final-delivery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+  attestations: write
+  id-token: write
+
+concurrency:
+  group: planjoy-r73-final-delivery-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERSION: '0.7.3'
+  SETUP_NAME: PlanJoyR73-Windows-Setup-x64-v0.7.3.exe
+  PORTABLE_NAME: PlanJoyR73-Windows-x64-v0.7.3-Portable.zip
+  SOURCE_NAME: PlanJoyR73-Source-v0.7.3.zip
+  FINAL_NAME: PlanJoyR73-Windows-Final-Delivery-v0.7.3.zip
+
+jobs:
+  build:
+    name: Build and package complete Windows application
+    runs-on: windows-2025
+    timeout-minutes: 90
+    outputs:
+      source_sha: ${{ steps.context.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+
+      - id: context
+        name: Record immutable source context
+        shell: pwsh
+        run: |
+          "source_sha=$env:GITHUB_SHA" >> $env:GITHUB_OUTPUT
+          "commit=$env:GITHUB_SHA" | Tee-Object build-context.txt
+          "run_id=$env:GITHUB_RUN_ID" | Tee-Object -Append build-context.txt
+          "runner=$env:RUNNER_OS $env:ImageOS" | Tee-Object -Append build-context.txt
+
+      - name: Reconstruct and repair verified professional desktop source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf desktop source-recovery
+          mkdir -p desktop source-recovery
+          python - <<'PY'
+          from pathlib import Path
+          import base64, hashlib
+
+          root = Path('planjoy-r73-desktop-v3')
+          order = [
+              'part00.b64','part01.b64','part02.b64','tail50.b64',
+              'miss00.b64','miss01.b64','miss02.b64','miss03.b64','gap03.b64',
+              'miss04.b64','miss05.b64','miss06.b64','gap-last.b64'
+          ]
+          parts = {name: (root / name).read_text(encoding='utf-8').strip() for name in order}
+          parts['tail50.b64'] = ''.join(
+              (root / 'correct' / name).read_text(encoding='utf-8').strip()
+              for name in ('tail50-00.b64','tail50-01.b64','tail50-02.b64')
+          )
+          encoded = ''.join(parts[name] for name in order)
+          if len(encoded) != 200124:
+              raise SystemExit(f'unexpected source Base64 length: {len(encoded)}')
+          if encoded[190790] != '=' or encoded[-1] != '=':
+              raise SystemExit('source transport boundary markers changed')
+          encoded = encoded[:190790] + 'N' + encoded[190791:]
+          archive = base64.b64decode(encoded, validate=True)
+          digest = hashlib.sha256(archive).hexdigest()
+          if len(archive) != 150092:
+              raise SystemExit(f'unexpected source archive size: {len(archive)}')
+          if digest != '3edf0aa68f9f7d4731e13dd8d83a4fd00cfe9f766b76f20592f45cb7b9e5837c':
+              raise SystemExit(f'source archive SHA mismatch: {digest}')
+          Path('source-recovery/planjoy-r73-professional-source.tar.xz').write_bytes(archive)
+          print(f'archive_size={len(archive)} archive_sha256={digest}')
+          PY
+          tar -xJf source-recovery/planjoy-r73-professional-source.tar.xz -C desktop 2> source-recovery/tar-recovery.log || true
+          python planjoy-r73-final-source/repair_source.py desktop planjoy-r73-final-source/preload.js | tee source-recovery/repair-result.json
+
+      - name: Generate verified 256px Windows icon without private assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Drawing
+          $sourcePath = (Resolve-Path 'desktop/assets/icons/planjoy.png').Path
+          $targetPath = Join-Path (Resolve-Path 'desktop/assets/icons').Path 'planjoy.ico'
+          $source = [System.Drawing.Image]::FromFile($sourcePath)
+          try {
+            $bitmap = New-Object System.Drawing.Bitmap 256, 256, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            try {
+              $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+              try {
+                $graphics.Clear([System.Drawing.Color]::Transparent)
+                $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+                $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $graphics.DrawImage($source, 0, 0, 256, 256)
+              } finally { $graphics.Dispose() }
+              $stream = New-Object System.IO.MemoryStream
+              try {
+                $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+                $png = $stream.ToArray()
+              } finally { $stream.Dispose() }
+            } finally { $bitmap.Dispose() }
+          } finally { $source.Dispose() }
+          $file = [System.IO.File]::Create($targetPath)
+          $writer = New-Object System.IO.BinaryWriter($file)
+          try {
+            $writer.Write([UInt16]0); $writer.Write([UInt16]1); $writer.Write([UInt16]1)
+            $writer.Write([Byte]0); $writer.Write([Byte]0); $writer.Write([Byte]0); $writer.Write([Byte]0)
+            $writer.Write([UInt16]1); $writer.Write([UInt16]32)
+            $writer.Write([UInt32]$png.Length); $writer.Write([UInt32]22)
+            $writer.Write($png)
+          } finally { $writer.Dispose(); $file.Dispose() }
+          $bytes = [System.IO.File]::ReadAllBytes($targetPath)
+          if($bytes.Length -lt 5000){ throw "generated ICO is too small: $($bytes.Length)" }
+          if($bytes[0] -ne 0 -or $bytes[1] -ne 0 -or $bytes[2] -ne 1 -or $bytes[3] -ne 0){ throw 'invalid ICO header' }
+          Get-FileHash $targetPath -Algorithm SHA256 | Format-List
+          $manifestPath = 'desktop/SOURCE_RECOVERY_MANIFEST.json'
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $iconHash = (Get-FileHash $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $iconInfo = [ordered]@{
+            path = 'assets/icons/planjoy.ico'
+            size = (Get-Item $targetPath).Length
+            sha256 = $iconHash
+            format = 'ICO with embedded 256x256 PNG'
+          }
+          $manifest | Add-Member -NotePropertyName generated_windows_icon -NotePropertyValue $iconInfo -Force
+          $manifest | ConvertTo-Json -Depth 12 | Set-Content $manifestPath -Encoding UTF8
+
+      - name: Source syntax, security and 69-point professional parity contract
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node --check main.js
+          node --check preload.js
+          node --check renderer/app.js
+          node tests/desktop_contract_test.js | Tee-Object -FilePath desktop-contract.log
+          if(!(Select-String desktop-contract.log -Pattern '^DESKTOP_CONTRACT_PASS 69$')){ throw '69-point desktop parity contract failed' }
+          $main = Get-Content main.js -Raw
+          if($main -notmatch 'contextIsolation:true'){ throw 'context isolation missing' }
+          if($main -notmatch 'nodeIntegration:false'){ throw 'node integration must be disabled' }
+          if($main -notmatch 'sandbox:true'){ throw 'renderer sandbox missing' }
+          $preload = Get-Content preload.js -Raw
+          if($preload -notmatch 'contextBridge\.exposeInMainWorld'){ throw 'isolated preload bridge missing' }
+          if(Test-Path assets/fonts/IRANSansXVF.ttf){ throw 'private font binary must not be redistributed' }
+          if(!(Test-Path SOURCE_RECOVERY_MANIFEST.json)){ throw 'source recovery manifest missing' }
+
+      - name: Install pinned desktop dependencies
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --no-audit --no-fund
+          npm ls --depth=0
+
+      - name: Build complete Electron x64 Windows runtime
+        working-directory: desktop
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run build:win
+          $app = 'dist/win-unpacked/PlanJoy.exe'
+          if(!(Test-Path $app)){ throw 'PlanJoy.exe missing from Windows runtime' }
+          if((Get-Item $app).Length -lt 50MB){ throw "runtime executable unexpectedly small: $((Get-Item $app).Length)" }
+          $required = @(
+            'resources/app/main.js','resources/app/preload.js','resources/app/renderer/app.js',
+            'resources/app/renderer/app.css','resources/app/renderer/index.html',
+            'resources/app/assets/icons/planjoy.ico','resources/app/assets/icons/planjoy.png',
+            'resources/app/assets/sounds/soft_pop.wav','resources/app/assets/sounds/focus_start.wav',
+            'resources/app/assets/sounds/reward_chime.wav','resources/app/SOURCE_RECOVERY_MANIFEST.json'
+          )
+          foreach($relative in $required){
+            if(!(Test-Path (Join-Path 'dist/win-unpacked' $relative))){ throw "runtime member missing: $relative" }
+          }
+          foreach($scene in 'today','calendar','goals','focus','review','stats','countdown','widgets','joy','smart','settings'){
+            if(!(Test-Path "dist/win-unpacked/resources/app/assets/scenes/$scene.svg")){ throw "scene missing: $scene" }
+          }
+          if(Get-ChildItem 'dist/win-unpacked/resources/app/assets' -Recurse -Filter '*.ttf' -ErrorAction SilentlyContinue){ throw 'runtime contains a redistributed private font binary' }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $app))
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if($machine -ne 0x8664){ throw ('PlanJoy.exe is not AMD64: 0x{0:X4}' -f $machine) }
+          Get-AuthenticodeSignature $app | Format-List | Tee-Object unsigned-runtime-signature.txt
+
+      - name: Build complete current-user setup and portable package
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if(Test-Path installer/payload.zip){ Remove-Item installer/payload.zip -Force }
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath installer/payload.zip -CompressionLevel Optimal
+          Push-Location installer
+          try {
+            $env:GOOS = 'windows'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
+            go build -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o "../dist/$env:SETUP_NAME" main.go
+          } finally { Pop-Location }
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath "dist/$env:PORTABLE_NAME" -CompressionLevel Optimal
+          foreach($file in "dist/$env:SETUP_NAME","dist/$env:PORTABLE_NAME"){
+            if(!(Test-Path $file)){ throw "package missing: $file" }
+            if((Get-Item $file).Length -lt 60MB){ throw "package unexpectedly small: $file / $((Get-Item $file).Length)" }
+          }
+          $setupBytes = [System.IO.File]::ReadAllBytes((Resolve-Path "dist/$env:SETUP_NAME"))
+          $setupOffset = [BitConverter]::ToInt32($setupBytes, 0x3c)
+          $setupMachine = [BitConverter]::ToUInt16($setupBytes, $setupOffset + 4)
+          if($setupMachine -ne 0x8664){ throw ('setup is not AMD64: 0x{0:X4}' -f $setupMachine) }
+
+      - name: Validate portable archive completeness and security
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $check = Join-Path $env:RUNNER_TEMP 'planjoy-portable-check'
+          if(Test-Path $check){ Remove-Item $check -Recurse -Force }
+          Expand-Archive "dist/$env:PORTABLE_NAME" $check -Force
+          foreach($relative in @(
+            'PlanJoy.exe','resources/app/main.js','resources/app/preload.js',
+            'resources/app/renderer/app.js','resources/app/renderer/app.css',
+            'resources/app/assets/icons/planjoy.ico','resources/app/assets/sounds/reward_chime.wav'
+          )){
+            if(!(Test-Path (Join-Path $check $relative))){ throw "portable member missing: $relative" }
+          }
+          if(Get-ChildItem (Join-Path $check 'resources/app/assets') -Recurse -Filter '*.ttf' -ErrorAction SilentlyContinue){ throw 'portable archive contains private font binary' }
+          $main = Get-Content (Join-Path $check 'resources/app/main.js') -Raw
+          if($main -notmatch 'contextIsolation:true' -or $main -notmatch 'nodeIntegration:false' -or $main -notmatch 'sandbox:true'){ throw 'portable security contract failed' }
+
+      - name: Create source package, release manifest and candidate delivery
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidate = Join-Path $PWD 'candidate'
+          $sourceStage = Join-Path $env:RUNNER_TEMP 'PlanJoyR73-Source-v0.7.3'
+          Remove-Item $candidate,$sourceStage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $candidate,$sourceStage -ItemType Directory -Force | Out-Null
+
+          foreach($file in 'package.json','package-lock.json','main.js','preload.js','WINDOWS_DESKTOP_PARITY.md','Windows_Smoke_Check_R73.ps1','SOURCE_RECOVERY_MANIFEST.json'){
+            if(Test-Path $file){ Copy-Item $file $sourceStage -Force }
+          }
+          foreach($dir in 'renderer','assets','tests','installer'){
+            Copy-Item $dir (Join-Path $sourceStage $dir) -Recurse -Force
+          }
+          Remove-Item (Join-Path $sourceStage 'installer/payload.zip') -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $sourceStage 'assets/fonts/IRANSansXVF.ttf') -Force -ErrorAction SilentlyContinue
+          if(Get-ChildItem $sourceStage -Recurse -Filter '*.ttf' -ErrorAction SilentlyContinue){ throw 'source package contains private font binary' }
+
+          $readme = @'
+          PlanJoy R7.3 — Certified Windows Delivery / تحویل نهایی ویندوز
+
+          INSTALL / نصب:
+          Run PlanJoyR73-Windows-Setup-x64-v0.7.3.exe.
+          فایل نصب را اجرا کنید. نصب فقط برای کاربر فعلی و بدون نیاز به دسترسی Administrator انجام می‌شود.
+
+          PORTABLE / نسخه پرتابل:
+          Extract PlanJoyR73-Windows-x64-v0.7.3-Portable.zip and run PlanJoy.exe.
+          فایل پرتابل را از حالت فشرده خارج کرده و PlanJoy.exe را اجرا کنید.
+
+          DATA / داده‌ها:
+          User data is stored under %LOCALAPPDATA%\PlanJoyR1 and is preserved during upgrade and uninstall.
+          داده‌های کاربر در مسیر فوق باقی می‌مانند و با بروزرسانی یا حذف برنامه پاک نمی‌شوند.
+
+          SIGNING NOTICE / وضعیت امضای دیجیتال:
+          This release is not commercially Authenticode-signed. Windows SmartScreen may show an unknown-publisher warning.
+          این نسخه گواهی تجاری امضای کد ندارد و ممکن است Windows SmartScreen هشدار ناشر ناشناس نمایش دهد.
+          The package installs with requestedExecutionLevel=asInvoker and never requests administrator elevation.
+
+          Verify package hashes with SHA256SUMS.txt before installation.
+          '@
+          Set-Content (Join-Path $candidate 'README-FIRST.txt') $readme -Encoding UTF8
+          Set-Content (Join-Path $sourceStage 'README-FIRST.txt') $readme -Encoding UTF8
+          Set-Content (Join-Path $candidate 'UNSIGNED-RELEASE-NOTICE.txt') 'Unsigned production artifact; the CI workflow separately verifies a disposable Authenticode signing pipeline without modifying the delivered binaries.' -Encoding UTF8
+
+          Compress-Archive -Path "$sourceStage/*" -DestinationPath (Join-Path $candidate $env:SOURCE_NAME) -CompressionLevel Optimal
+          Copy-Item "dist/$env:SETUP_NAME" $candidate
+          Copy-Item "dist/$env:PORTABLE_NAME" $candidate
+          $contextFile = Join-Path $env:GITHUB_WORKSPACE 'build-context.txt'
+          Copy-Item -Path @('desktop-contract.log',$contextFile,'SOURCE_RECOVERY_MANIFEST.json') -Destination $candidate -Force
+
+          $artifactNames = @($env:SETUP_NAME,$env:PORTABLE_NAME,$env:SOURCE_NAME)
+          $artifacts = foreach($name in $artifactNames){
+            $path = Join-Path $candidate $name
+            $hash = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            [ordered]@{ name=$name; size=(Get-Item $path).Length; sha256=$hash }
+          }
+          $manifest = [ordered]@{
+            format = 'PlanJoy-R73-Windows-build-manifest-v1'
+            version = $env:VERSION
+            commit = $env:GITHUB_SHA
+            workflow_run_id = $env:GITHUB_RUN_ID
+            workflow_run_number = $env:GITHUB_RUN_NUMBER
+            build_runner = 'windows-2025'
+            architecture = 'x64'
+            installer_scope = 'current-user'
+            requested_execution_level = 'asInvoker'
+            production_authenticode_status = 'unsigned'
+            private_font_binaries_redistributed = $false
+            contract = 'DESKTOP_CONTRACT_PASS 69'
+            artifacts = @($artifacts)
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $candidate 'BUILD-MANIFEST.json') -Encoding UTF8
+          $lines = foreach($entry in $artifacts){ "$($entry.sha256)  $($entry.name)" }
+          $lines | Set-Content (Join-Path $candidate 'SHA256SUMS.txt') -Encoding ascii
+          Get-ChildItem $candidate | Select-Object Name,Length | Format-Table | Tee-Object (Join-Path $candidate 'CANDIDATE-FILE-LIST.txt')
+
+      - name: Stage exact runtime candidate for Windows certification
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $PWD 'runtime-candidate'
+          Remove-Item $runtime -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $runtime -ItemType Directory -Force | Out-Null
+          Copy-Item dist/win-unpacked (Join-Path $runtime 'win-unpacked') -Recurse -Force
+          Copy-Item "dist/$env:SETUP_NAME" $runtime
+          Copy-Item desktop-contract.log $runtime
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-delivery-candidate
+          path: desktop/candidate/**
+          retention-days: 7
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-runtime-candidate
+          path: desktop/runtime-candidate/**
+          retention-days: 7
+          if-no-files-found: error
+
+  runtime:
+    name: Runtime certification (${{ matrix.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 55
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-runtime-candidate
+          path: runtime
+
+      - name: Locate and verify candidate artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = (Get-ChildItem runtime -Recurse -Filter PlanJoy.exe | Where-Object {$_.FullName -match 'win-unpacked'} | Select-Object -First 1).FullName
+          $setup = (Get-ChildItem runtime -Recurse -Filter $env:SETUP_NAME | Select-Object -First 1).FullName
+          if(!$app -or !$setup){ throw 'runtime candidate files are missing' }
+          "APP=$app" >> $env:GITHUB_ENV
+          "SETUP=$setup" >> $env:GITHUB_ENV
+          if((Get-Item $app).Length -lt 50MB){ throw 'runtime executable is incomplete' }
+          if((Get-Item $setup).Length -lt 60MB){ throw 'setup payload is incomplete' }
+
+      - name: Direct application launch and persistence smoke (three passes)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Stop-PlanJoy { Get-Process PlanJoy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }
+          Stop-PlanJoy
+          $measurements = @()
+          foreach($pass in 1..3){
+            $process = Start-Process -FilePath $env:APP -ArgumentList '--disable-gpu' -PassThru
+            Start-Sleep -Seconds 7
+            if($process.HasExited){ throw "direct application exited early on pass $pass with code $($process.ExitCode)" }
+            $live = Get-Process -Id $process.Id -ErrorAction Stop
+            if($live.WorkingSet64 -gt 1400MB){ throw "working set too high on pass $pass: $($live.WorkingSet64)" }
+            $measurements += [ordered]@{ pass=$pass; pid=$live.Id; working_set=$live.WorkingSet64 }
+            Stop-PlanJoy
+          }
+          $db = Join-Path $env:LOCALAPPDATA 'PlanJoyR1/planjoy_desktop_r73.db'
+          if(!(Test-Path $db)){ throw 'desktop SQLite database was not initialized' }
+          $measurements | ConvertTo-Json -Depth 4 | Set-Content "direct-launch-measurements-${{ matrix.os }}.json" -Encoding UTF8
+
+      - name: Install, register, launch, upgrade and uninstall without elevation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Stop-PlanJoy { Get-Process PlanJoy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 700 }
+          Stop-PlanJoy
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs/PlanJoy'
+          $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlanJoy'
+          $protocolKey = 'HKCU:\Software\Classes\planjoy\shell\open\command'
+          $startLink = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/PlanJoy.lnk'
+          $desktopLink = Join-Path $env:USERPROFILE 'Desktop/PlanJoy.lnk'
+          Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlanJoy' -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item 'HKCU:\Software\Classes\planjoy' -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $startLink,$desktopLink -Force -ErrorAction SilentlyContinue
+
+          $install = Start-Process -FilePath $env:SETUP -ArgumentList @('--silent','--no-launch') -Wait -PassThru
+          if($install.ExitCode -ne 0){ throw "installer failed with exit code $($install.ExitCode)" }
+          $installed = Join-Path $installDir 'PlanJoy.exe'
+          $uninstaller = Join-Path $installDir 'PlanJoyUninstall.exe'
+          foreach($required in $installed,$uninstaller,(Join-Path $installDir 'resources/app/main.js'),(Join-Path $installDir 'resources/app/preload.js')){
+            if(!(Test-Path $required)){ throw "installed member missing: $required" }
+          }
+          if(!(Test-Path $uninstallKey)){ throw 'Apps & Features registration missing' }
+          $registration = Get-ItemProperty $uninstallKey
+          if($registration.DisplayVersion -ne $env:VERSION){ throw "installed version mismatch: $($registration.DisplayVersion)" }
+          if($registration.InstallLocation -ne $installDir){ throw 'current-user install location mismatch' }
+          if(!(Test-Path $protocolKey)){ throw 'planjoy:// protocol registration missing' }
+          if(!(Test-Path $startLink)){ throw 'Start Menu shortcut missing' }
+          if(!(Test-Path $desktopLink)){ throw 'Desktop shortcut missing' }
+
+          $process = Start-Process -FilePath $installed -ArgumentList '--disable-gpu' -PassThru
+          Start-Sleep -Seconds 8
+          if($process.HasExited){ throw "installed app exited early with code $($process.ExitCode)" }
+          $installedWorkingSet = (Get-Process -Id $process.Id -ErrorAction Stop).WorkingSet64
+          Start-Process 'planjoy://today'
+          Start-Sleep -Seconds 3
+          if(!(Get-Process PlanJoy -ErrorAction SilentlyContinue)){ throw 'registered protocol did not route to the application' }
+          Stop-PlanJoy
+
+          $dataDir = Join-Path $env:LOCALAPPDATA 'PlanJoyR1'
+          New-Item $dataDir -ItemType Directory -Force | Out-Null
+          $sentinel = Join-Path $dataDir 'preserve-r73-ci.txt'
+          Set-Content $sentinel 'keep-user-data-across-upgrade-and-uninstall' -Encoding UTF8
+          $upgrade = Start-Process -FilePath $env:SETUP -ArgumentList @('--silent','--no-launch') -Wait -PassThru
+          if($upgrade.ExitCode -ne 0){ throw "upgrade/reinstall failed with code $($upgrade.ExitCode)" }
+          if(!(Test-Path $sentinel)){ throw 'upgrade deleted user data' }
+          if((Get-ItemProperty $uninstallKey).DisplayVersion -ne $env:VERSION){ throw 'upgrade registration failed' }
+
+          $remove = Start-Process -FilePath $uninstaller -ArgumentList @('--uninstall','--silent') -Wait -PassThru
+          if($remove.ExitCode -ne 0){ throw "uninstall failed with code $($remove.ExitCode)" }
+          Stop-PlanJoy
+          foreach($attempt in 1..25){ if(!(Test-Path $installDir)){ break }; Start-Sleep -Seconds 1 }
+          if(Test-Path $installDir){ throw 'program directory remained after uninstall timeout' }
+          if(Test-Path $uninstallKey){ throw 'uninstall registry entry remained' }
+          if(Test-Path 'HKCU:\Software\Classes\planjoy'){ throw 'protocol registration remained after uninstall' }
+          if(Test-Path $startLink){ throw 'Start Menu shortcut remained after uninstall' }
+          if(Test-Path $desktopLink){ throw 'Desktop shortcut remained after uninstall' }
+          if(!(Test-Path $sentinel)){ throw 'uninstall deleted user data' }
+
+          [ordered]@{
+            installer_exit = $install.ExitCode
+            upgrade_exit = $upgrade.ExitCode
+            uninstall_exit = $remove.ExitCode
+            installed_working_set = $installedWorkingSet
+            install_location = $installDir
+            data_preserved = $true
+            protocol_verified = $true
+            shortcuts_verified = $true
+          } | ConvertTo-Json -Depth 5 | Set-Content "install-lifecycle-${{ matrix.os }}.json" -Encoding UTF8
+
+      - name: Verify disposable Authenticode signing pipeline without modifying release files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $copy = Join-Path $env:RUNNER_TEMP 'PlanJoyR73-disposable-signed-ci.exe'
+          Copy-Item $env:SETUP $copy -Force
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=PlanJoy R7.3 Disposable CI' -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable -HashAlgorithm SHA256 -NotAfter (Get-Date).AddDays(1)
+          $root = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','CurrentUser')
+          $trusted = New-Object System.Security.Cryptography.X509Certificates.X509Store('TrustedPublisher','CurrentUser')
+          try {
+            $root.Open('ReadWrite'); $root.Add($cert)
+            $trusted.Open('ReadWrite'); $trusted.Add($cert)
+            $signature = Set-AuthenticodeSignature -FilePath $copy -Certificate $cert -HashAlgorithm SHA256
+            if($signature.Status -ne 'Valid'){ throw "disposable Authenticode pipeline failed: $($signature.Status)" }
+            [ordered]@{ status=$signature.Status.ToString(); signer=$cert.Subject; thumbprint=$cert.Thumbprint; release_files_modified=$false } | ConvertTo-Json | Set-Content "authenticode-pipeline-${{ matrix.os }}.json" -Encoding UTF8
+          } finally {
+            try { $root.Remove($cert) } catch {}
+            try { $trusted.Remove($cert) } catch {}
+            try { $root.Close() } catch {}
+            try { $trusted.Close() } catch {}
+            Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Produce runtime certification receipt
+        shell: pwsh
+        run: |
+          $computer = Get-ComputerInfo
+          $receipt = [ordered]@{
+            format = 'PlanJoy-R73-runtime-certification-v1'
+            matrix_label = '${{ matrix.os }}'
+            windows_product = $computer.WindowsProductName
+            windows_version = $computer.WindowsVersion
+            os_build = $computer.OsBuildNumber
+            architecture = $env:PROCESSOR_ARCHITECTURE
+            github_run_id = $env:GITHUB_RUN_ID
+            github_sha = $env:GITHUB_SHA
+            direct_launch_passes = 3
+            current_user_install = $true
+            elevation_requested = $false
+            protocol_live_test = $true
+            upgrade_preserved_data = $true
+            uninstall_preserved_data = $true
+            disposable_authenticode_pipeline = 'Valid'
+            production_artifact_signed = $false
+          }
+          $receipt | ConvertTo-Json -Depth 6 | Set-Content "runtime-certification-${{ matrix.os }}.json" -Encoding UTF8
+          Get-FileHash $env:APP,$env:SETUP -Algorithm SHA256 | Format-Table | Out-String | Set-Content "runtime-hashes-${{ matrix.os }}.txt" -Encoding UTF8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-runtime-${{ matrix.os }}
+          path: |
+            direct-launch-measurements-${{ matrix.os }}.json
+            install-lifecycle-${{ matrix.os }}.json
+            authenticode-pipeline-${{ matrix.os }}.json
+            runtime-certification-${{ matrix.os }}.json
+            runtime-hashes-${{ matrix.os }}.txt
+          retention-days: 7
+          if-no-files-found: error
+
+  certify:
+    name: Assemble certified final delivery
+    needs: [build, runtime]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-delivery-candidate
+          path: candidate
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: planjoy-r73-runtime-*
+          path: runtime-receipts
+          merge-multiple: true
+
+      - name: Verify candidate hashes and both Windows runtime receipts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd candidate
+          sha256sum -c SHA256SUMS.txt
+          cd ..
+          test -f runtime-receipts/runtime-certification-windows-2022.json
+          test -f runtime-receipts/runtime-certification-windows-2025.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          for name in ('windows-2022','windows-2025'):
+              receipt = json.loads(Path(f'runtime-receipts/runtime-certification-{name}.json').read_text(encoding='utf-8-sig'))
+              assert receipt['direct_launch_passes'] == 3
+              assert receipt['current_user_install'] is True
+              assert receipt['protocol_live_test'] is True
+              assert receipt['upgrade_preserved_data'] is True
+              assert receipt['uninstall_preserved_data'] is True
+              assert receipt['disposable_authenticode_pipeline'] == 'Valid'
+              assert receipt['production_artifact_signed'] is False
+          print('RUNTIME_MATRIX_CERTIFIED windows-2022 windows-2025')
+          PY
+
+      - name: Build final combined package and certification receipt
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf final-stage final-output
+          mkdir -p final-stage/runtime-certification final-output
+          cp candidate/* final-stage/
+          cp runtime-receipts/* final-stage/runtime-certification/
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+
+          candidate = Path('candidate')
+          runtime = Path('runtime-receipts')
+          build = json.loads((candidate/'BUILD-MANIFEST.json').read_text(encoding='utf-8-sig'))
+          receipts = [json.loads(path.read_text(encoding='utf-8-sig')) for path in sorted(runtime.glob('runtime-certification-*.json'))]
+          receipt = {
+              'format': 'PlanJoy-R73-final-certification-v1',
+              'version': '0.7.3',
+              'commit': os.environ['GITHUB_SHA'],
+              'workflow_run_id': os.environ['GITHUB_RUN_ID'],
+              'workflow_run_number': os.environ['GITHUB_RUN_NUMBER'],
+              'build_manifest': build,
+              'runtime_matrix': receipts,
+              'certified': True,
+              'production_authenticode_status': 'unsigned',
+              'note': 'A disposable self-signed Authenticode pipeline was validated on both runners; delivered binaries were intentionally not modified by that test.'
+          }
+          Path('final-stage/CERTIFICATION-RECEIPT.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+          PY
+          (cd final-stage && zip -9 -r "../final-output/$FINAL_NAME" .)
+          cp final-stage/* final-output/ 2>/dev/null || true
+          cp candidate/$SETUP_NAME candidate/$PORTABLE_NAME candidate/$SOURCE_NAME final-output/
+          cp candidate/README-FIRST.txt candidate/BUILD-MANIFEST.json candidate/SHA256SUMS.txt candidate/UNSIGNED-RELEASE-NOTICE.txt final-output/
+          cp final-stage/CERTIFICATION-RECEIPT.json final-output/
+          mkdir -p final-output/runtime-certification
+          cp runtime-receipts/* final-output/runtime-certification/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+          out = Path('final-output')
+          files = [
+              out/'PlanJoyR73-Windows-Setup-x64-v0.7.3.exe',
+              out/'PlanJoyR73-Windows-x64-v0.7.3-Portable.zip',
+              out/'PlanJoyR73-Source-v0.7.3.zip',
+              out/'PlanJoyR73-Windows-Final-Delivery-v0.7.3.zip',
+          ]
+          entries=[]
+          for path in files:
+              digest=hashlib.sha256(path.read_bytes()).hexdigest()
+              entries.append({'name':path.name,'size':path.stat().st_size,'sha256':digest})
+          (out/'SHA256SUMS-ALL.txt').write_text(''.join(f"{x['sha256']}  {x['name']}\n" for x in entries), encoding='ascii')
+          (out/'FINAL-FILE-MANIFEST.json').write_text(json.dumps({'format':'PlanJoy-R73-final-file-manifest-v1','version':'0.7.3','files':entries},indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(entries,indent=2))
+          PY
+          find final-output -maxdepth 2 -type f -printf '%P|%s\n' | sort | tee final-output/FINAL-FILE-LIST.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-windows-final-certified
+          path: final-output/**
+          retention-days: 14
+          if-no-files-found: error

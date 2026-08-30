@@ -1,0 +1,26 @@
+name: PlanJoy R7.1 Signing Tools
+on:
+  push:
+    branches: [tmp-planjoy-ux-ci]
+  workflow_dispatch:
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect Android signing tools
+        shell: bash
+        run: |
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          echo "Using $BT"
+          mkdir -p signing-tools/lib signing-tools/lib64
+          cp "$BT/apksigner" signing-tools/
+          cp "$BT/zipalign" signing-tools/
+          cp "$BT/lib/apksigner.jar" signing-tools/lib/
+          if [ -d "$BT/lib64" ]; then cp -a "$BT/lib64/." signing-tools/lib64/; fi
+          chmod +x signing-tools/apksigner signing-tools/zipalign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoyR71-Android-signing-tools
+          path: signing-tools
+          retention-days: 1

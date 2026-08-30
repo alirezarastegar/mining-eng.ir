@@ -1,0 +1,4 @@
+From https://github.com/alirezarastegar/mining-eng.ir
+ * branch            tmp-planjoy-r7-build -> FETCH_HEAD
+ * [new branch]      tmp-planjoy-r7-build -> origin/tmp-planjoy-r7-build
+error: pathspec 'planjoy-r7-source' did not match any file(s) known to git

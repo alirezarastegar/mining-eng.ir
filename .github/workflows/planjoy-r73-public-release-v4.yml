@@ -1,0 +1,198 @@
+name: PlanJoy R7.3 Public Windows Release v4
+
+on:
+  push:
+    branches: [tmp-planjoy-r73-final-delivery]
+    paths:
+      - '.github/workflows/planjoy-r73-public-release-v4.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  BASE_RUN_ID: '33342319495'
+  VERSION: '0.7.3'
+  TAG: 'planjoy-r73-v0.7.3-final-download'
+  SETUP_NAME: 'PlanJoyR73-Windows-Setup-x64-v0.7.3.exe'
+  PORTABLE_NAME: 'PlanJoyR73-Windows-x64-v0.7.3-Portable.zip'
+  SOURCE_NAME: 'PlanJoyR73-Source-v0.7.3.zip'
+
+jobs:
+  build-test-release:
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-runtime-candidate
+          path: runtime-base
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.BASE_RUN_ID }}
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-delivery-candidate
+          path: delivery-base
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.BASE_RUN_ID }}
+
+      - name: Stage source and runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Remove-Item source,runtime,dist -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item source,runtime,dist -ItemType Directory -Force | Out-Null
+          Expand-Archive "delivery-base/$env:SOURCE_NAME" source -Force
+          $runtimeDir=(Get-ChildItem runtime-base -Directory -Recurse | Where-Object {$_.Name -eq 'win-unpacked'} | Select-Object -First 1).FullName
+          if(!$runtimeDir){throw 'win-unpacked runtime missing'}
+          Copy-Item "$runtimeDir/*" runtime -Recurse -Force
+          if(!(Test-Path 'runtime/PlanJoy.exe')){throw 'PlanJoy.exe missing'}
+          if(!(Test-Path 'source/installer/main.go')){throw 'installer source missing'}
+
+      - name: Apply Windows startup hotfix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $old="dataDir = path.join(app.getPath('localAppData'),'PlanJoyR1');"
+          $new="dataDir = path.join(process.env.LOCALAPPDATA || app.getPath('appData'),'PlanJoyR1');"
+          foreach($target in @('source/main.js','runtime/resources/app/main.js')){
+            $text=Get-Content $target -Raw
+            if($text.Contains($old)){$text=$text.Replace($old,$new)}
+            Set-Content $target $text -Encoding UTF8 -NoNewline
+            $check=Get-Content $target -Raw
+            if($check.Contains("getPath('localAppData')")){throw "invalid Electron localAppData path remains in $target"}
+            if(!$check.Contains('process.env.LOCALAPPDATA')){throw "LOCALAPPDATA hotfix missing in $target"}
+            node --check $target
+          }
+
+      - name: Source and UX contract gates
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check main.js
+          node --check preload.js
+          node --check renderer/app.js
+          node tests/desktop_contract_test.js | Tee-Object desktop-contract.log
+          if(!(Select-String desktop-contract.log -Pattern '^DESKTOP_CONTRACT_PASS 69$')){throw '69-point desktop contract failed'}
+          $main=Get-Content main.js -Raw
+          if($main -notmatch 'contextIsolation:true' -or $main -notmatch 'nodeIntegration:false' -or $main -notmatch 'sandbox:true'){throw 'Electron security contract failed'}
+          if((Get-Content preload.js -Raw) -notmatch 'contextBridge\.exposeInMainWorld'){throw 'preload bridge missing'}
+          gofmt -w installer/main.go
+          Push-Location installer
+          try {
+            $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+            if(Test-Path go.mod){go test ./...}
+            go build -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o "$env:RUNNER_TEMP/PlanJoy-installer-compile-check.exe" main.go
+          } finally {Pop-Location}
+
+      - name: Hotfixed runtime launch smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-Process PlanJoy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          $p=Start-Process (Resolve-Path 'runtime/PlanJoy.exe') -ArgumentList '--disable-gpu' -PassThru
+          Start-Sleep -Seconds 8
+          if($p.HasExited){throw "hotfixed runtime exited early: $($p.ExitCode)"}
+          $ws=(Get-Process -Id $p.Id).WorkingSet64
+          if($ws -gt 1400MB){throw "runtime working set too high: $ws"}
+          Stop-Process -Id $p.Id -Force
+
+      - name: Build installable setup portable and source packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Remove-Item 'source/installer/payload.zip' -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path runtime/* -DestinationPath source/installer/payload.zip -CompressionLevel Optimal
+          Push-Location source/installer
+          try {
+            $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+            go build -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o "../../dist/$env:SETUP_NAME" main.go
+          } finally {Pop-Location}
+          Compress-Archive -Path runtime/* -DestinationPath "dist/$env:PORTABLE_NAME" -CompressionLevel Optimal
+          $sourceStage=Join-Path $env:RUNNER_TEMP 'PlanJoyR73-Source'
+          Remove-Item $sourceStage -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item source $sourceStage -Recurse -Force
+          Remove-Item (Join-Path $sourceStage 'installer/payload.zip') -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$sourceStage/*" -DestinationPath "dist/$env:SOURCE_NAME" -CompressionLevel Optimal
+          if((Get-Item "dist/$env:SETUP_NAME").Length -lt 60MB){throw 'setup unexpectedly small'}
+          if((Get-Item "dist/$env:PORTABLE_NAME").Length -lt 60MB){throw 'portable unexpectedly small'}
+
+      - name: Real installer lifecycle test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-Process PlanJoy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          $setup=(Resolve-Path "dist/$env:SETUP_NAME").Path
+          $i=Start-Process $setup -ArgumentList '--silent','--no-launch' -Wait -PassThru
+          if($i.ExitCode -ne 0){throw "installer failed: $($i.ExitCode)"}
+          $dir=Join-Path $env:LOCALAPPDATA 'Programs/PlanJoy'
+          $app=Join-Path $dir 'PlanJoy.exe'
+          $un=Join-Path $dir 'PlanJoyUninstall.exe'
+          if(!(Test-Path $app)){throw 'installed PlanJoy.exe missing'}
+          if(!(Test-Path $un)){throw 'uninstaller missing'}
+          if(!(Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlanJoy')){throw 'Apps & Features registration missing'}
+          $p=Start-Process $app -ArgumentList '--disable-gpu' -PassThru
+          Start-Sleep -Seconds 8
+          if($p.HasExited){throw "installed app exited early: $($p.ExitCode)"}
+          Stop-Process -Id $p.Id -Force
+          $u=Start-Process $un -ArgumentList '--uninstall','--silent' -Wait -PassThru
+          if($u.ExitCode -ne 0){throw "uninstall failed: $($u.ExitCode)"}
+
+      - name: Create checksums and release notes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $files=@("dist/$env:SETUP_NAME","dist/$env:PORTABLE_NAME","dist/$env:SOURCE_NAME")
+          ($files | ForEach-Object {"$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_))"}) | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          @"
+          PlanJoy R7.3 Windows x64 final download
+
+          - Hotfixed Windows LOCALAPPDATA startup path
+          - 69-point desktop UX contract: PASS
+          - Direct hotfixed runtime launch: PASS
+          - Real per-user installer install/launch/uninstall lifecycle: PASS
+          - Administrator elevation: not requested
+          - Production Authenticode: unsigned; SmartScreen can show Unknown Publisher
+          - Version: 0.7.3
+          - Commit: $env:GITHUB_SHA
+          - Workflow run: $env:GITHUB_RUN_ID
+          "@ | Set-Content dist/README-FIRST.txt -Encoding UTF8
+          Get-ChildItem dist | Select-Object Name,Length | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r73-public-release-files
+          path: |
+            dist/${{ env.SETUP_NAME }}
+            dist/${{ env.PORTABLE_NAME }}
+            dist/${{ env.SOURCE_NAME }}
+            dist/SHA256SUMS.txt
+            dist/README-FIRST.txt
+          retention-days: 14
+          compression-level: 0
+
+      - name: Publish GitHub Release with direct-download assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY 2>$null
+          if($LASTEXITCODE -eq 0){gh release delete $env:TAG --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag}
+          gh release create $env:TAG --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title 'PlanJoy R7.3 Windows x64 Final Download' --notes-file dist/README-FIRST.txt
+          gh release upload $env:TAG "dist/$env:SETUP_NAME" "dist/$env:PORTABLE_NAME" "dist/$env:SOURCE_NAME" dist/SHA256SUMS.txt dist/README-FIRST.txt --repo $env:GITHUB_REPOSITORY --clobber
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json url,tagName,name,assets

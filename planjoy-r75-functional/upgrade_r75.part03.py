@@ -7,7 +7,7 @@ function bindGlobal(){
   if(delegatedEventsBound)return;
   delegatedEventsBound=true;
   document.addEventListener('click',async e=>{
-    const routeBtn=e.target.closest?.('[data-route]');
+    const routeBtn=e.target.closest?.('.nav [data-route]');
     if(routeBtn){route=routeBtn.dataset.route;selectedTasks.clear();shell();return;}
     const viewBtn=e.target.closest?.('[data-view]');
     if(viewBtn){plannerView=viewBtn.dataset.view;shell();return;}
@@ -90,7 +90,7 @@ new_recur="await exec(`document.querySelector('[data-route=\\\"today\\\"]').clic
 if old_recur in main:
     main=main.replace(old_recur,new_recur,1)
 
-test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes('delegatedEventsBound'),'delegated event layer');ok(app.includes(\"closest?.('[data-route]')\"),'delegated route click handling');ok(app.includes('plannerView=viewBtn.dataset.view;shell()'),'planner tabs use shell rebuild');ok(app.includes('settingsSection=sectionBtn.dataset.settingsSection;shell()'),'settings tabs use shell rebuild');ok(app.includes('function shell(){')&&app.includes('applyRoot();')&&app.includes('if(widgetMode)return renderWidget()'),'shell root route update');ok(main.includes('planner tab click failed'),'runtime planner tab click certification');ok(main.includes('settings tab click failed'),'runtime settings tab click certification');ok(main.includes('renderer certification error'),'functional renderer diagnostics');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
+test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes('delegatedEventsBound'),'delegated event layer');ok(app.includes(\"closest?.('.nav [data-route]')\"),'sidebar-scoped delegated route handling');ok(app.includes('plannerView=viewBtn.dataset.view;shell()'),'planner tabs use shell rebuild');ok(app.includes('settingsSection=sectionBtn.dataset.settingsSection;shell()'),'settings tabs use shell rebuild');ok(app.includes('function shell(){')&&app.includes('applyRoot();')&&app.includes('if(widgetMode)return renderWidget()'),'shell root route update');ok(main.includes('planner tab click failed'),'runtime planner tab click certification');ok(main.includes('settings tab click failed'),'runtime settings tab click certification');ok(main.includes('renderer certification error'),'functional renderer diagnostics');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
 
 (root/'renderer/app.js').write_text(app)
 (root/'main.js').write_text(main)

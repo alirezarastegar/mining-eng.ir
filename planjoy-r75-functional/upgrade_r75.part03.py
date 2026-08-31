@@ -90,7 +90,7 @@ new_recur="await exec(`document.querySelector('[data-route=\\\"today\\\"]').clic
 if old_recur in main:
     main=main.replace(old_recur,new_recur,1)
 
-test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes('delegatedEventsBound'),'delegated event layer');ok(app.includes(\"closest?.('[data-route]')\"),'delegated route click handling');ok(app.includes('function shell(){\\n  applyRoot();'),'shell root route update');ok(main.includes('planner tab click failed'),'runtime planner tab click certification');ok(main.includes('settings tab click failed'),'runtime settings tab click certification');ok(main.includes('renderer certification error'),'functional renderer diagnostics');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
+test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes('delegatedEventsBound'),'delegated event layer');ok(app.includes(\"closest?.('[data-route]')\"),'delegated route click handling');ok(app.includes('function shell(){')&&app.includes('applyRoot();')&&app.includes('if(widgetMode)return renderWidget()'),'shell root route update');ok(main.includes('planner tab click failed'),'runtime planner tab click certification');ok(main.includes('settings tab click failed'),'runtime settings tab click certification');ok(main.includes('renderer certification error'),'functional renderer diagnostics');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
 
 (root/'renderer/app.js').write_text(app)
 (root/'main.js').write_text(main)

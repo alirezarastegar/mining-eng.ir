@@ -1,0 +1,39 @@
+name: PlanJoy Google Auth Cache
+on:
+  push:
+    branches: [planjoy-toolchain-20260831]
+    paths: ['.github/workflows/planjoy-google-auth-cache.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare Maven project
+        run: |
+          mkdir -p /tmp/pj-auth
+          cat > /tmp/pj-auth/pom.xml <<'EOF'
+          <project xmlns="http://maven.apache.org/POM/4.0.0">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>app.planjoy</groupId><artifactId>auth-cache</artifactId><version>1</version>
+            <repositories>
+              <repository><id>google</id><url>https://maven.google.com</url></repository>
+            </repositories>
+            <dependencies>
+              <dependency><groupId>com.google.android.gms</groupId><artifactId>play-services-auth</artifactId><version>21.4.0</version></dependency>
+            </dependencies>
+          </project>
+          EOF
+      - name: Resolve dependencies
+        run: mvn -q -f /tmp/pj-auth/pom.xml dependency:go-offline
+      - name: Package local Maven repository
+        run: |
+          cd "$HOME/.m2/repository"
+          zip -qr /tmp/planjoy-google-auth-m2.zip com/google/android/gms com/google/android/libraries com/google/auto com/google/code/findbugs javax/annotation org/checkerframework 2>/dev/null || true
+          test -s /tmp/planjoy-google-auth-m2.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-google-auth-m2
+          path: /tmp/planjoy-google-auth-m2.zip
+          retention-days: 1

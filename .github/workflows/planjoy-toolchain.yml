@@ -1,0 +1,89 @@
+name: PlanJoy Android Toolchain Cache
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install pinned Android SDK
+        shell: bash
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+      - name: Download pinned Gradle
+        shell: bash
+        run: |
+          mkdir -p /tmp/pjbundle/gradle
+          curl -fL --retry 4 https://services.gradle.org/distributions/gradle-9.5.0-bin.zip -o /tmp/gradle.zip
+          echo '553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746  /tmp/gradle.zip' | sha256sum -c -
+          unzip -q /tmp/gradle.zip -d /tmp/pjbundle/gradle
+      - name: Warm exact PlanJoy Gradle dependencies
+        shell: bash
+        run: |
+          mkdir -p /tmp/pjwarm/app/src/main/java/com/planjoy/cache
+          cat > /tmp/pjwarm/settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name="PlanJoyCacheWarm"
+          include(":app")
+          EOF
+          cat > /tmp/pjwarm/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "9.3.0" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
+          }
+          EOF
+          cat > /tmp/pjwarm/app/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application"); id("org.jetbrains.kotlin.plugin.compose") }
+          android {
+              namespace="com.planjoy.cache"; compileSdk=37
+              defaultConfig { applicationId="com.planjoy.cache"; minSdk=26; targetSdk=37; versionCode=1; versionName="1" }
+              buildFeatures { compose=true }
+              compileOptions { sourceCompatibility=JavaVersion.VERSION_17; targetCompatibility=JavaVersion.VERSION_17 }
+          }
+          dependencies {
+              val bom=platform("androidx.compose:compose-bom:2026.08.00")
+              implementation(bom); androidTestImplementation(bom)
+              implementation("androidx.activity:activity-compose:1.13.0")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.compose.animation:animation")
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+              debugImplementation("androidx.compose.ui:ui-tooling")
+          }
+          EOF
+          cat > /tmp/pjwarm/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:theme="@style/AppTheme"/></manifest>
+          EOF
+          mkdir -p /tmp/pjwarm/app/src/main/res/values
+          cat > /tmp/pjwarm/app/src/main/res/values/styles.xml <<'EOF'
+          <resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"/></resources>
+          EOF
+          /tmp/pjbundle/gradle/gradle-9.5.0/bin/gradle -p /tmp/pjwarm --no-daemon :app:dependencies :app:assembleRelease
+      - name: Stage portable toolchain and dependency cache
+        shell: bash
+        run: |
+          mkdir -p /tmp/pjbundle/android-sdk /tmp/pjbundle/gradle-user-home
+          cp -a "$ANDROID_HOME/platforms" /tmp/pjbundle/android-sdk/
+          cp -a "$ANDROID_HOME/build-tools" /tmp/pjbundle/android-sdk/
+          cp -a "$ANDROID_HOME/platform-tools" /tmp/pjbundle/android-sdk/
+          cp -a "$HOME/.gradle/caches" /tmp/pjbundle/gradle-user-home/
+          printf '%s\n' 'PlanJoy private build support cache only; no PlanJoy source is included.' > /tmp/pjbundle/README.txt
+          du -sh /tmp/pjbundle/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-android-toolchain-cache
+          path: /tmp/pjbundle
+          compression-level: 6
+          retention-days: 1

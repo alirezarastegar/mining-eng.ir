@@ -1,0 +1,29 @@
+name: PlanJoy JDK17 Cache
+on:
+  push:
+    branches: [ planjoy-toolchain-20260831 ]
+permissions:
+  contents: read
+jobs:
+  jdk17:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Package JDK 17
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pjjdk
+          echo "$JAVA_HOME"
+          tar -C "$(dirname "$JAVA_HOME")" -czf /tmp/pjjdk/jdk17.tgz "$(basename "$JAVA_HOME")"
+          sha256sum /tmp/pjjdk/jdk17.tgz > /tmp/pjjdk/jdk17.sha256
+          du -sh /tmp/pjjdk/jdk17.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-jdk17
+          path: /tmp/pjjdk
+          compression-level: 0
+          retention-days: 1

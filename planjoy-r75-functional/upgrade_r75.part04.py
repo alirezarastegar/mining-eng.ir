@@ -33,11 +33,11 @@ main=main.replace("if(count!==10)throw new Error(`widget gallery count ${count}`
 main=main.replace("const widgetTypes=['today','focus','goal','countdown','calendar','week','quadrant','mood','stats','joy'];","const widgetTypes=['today','next','focus','focusweek','goal','countdown','calendar','week','month','quadrant','mood','review','stats','joy','clock','fortune'];",1)
 
 old_widget_assert="ok(main.includes(\"['today','focus','goal','countdown','calendar','week','quadrant','mood','stats','joy']\"),'ten widgets');"
-new_widget_assert="ok(main.includes(\"['today','next','focus','focusweek','goal','countdown','calendar','week','month','quadrant','mood','review','stats','joy','clock','fortune']\"),'sixteen widgets');"
+new_widget_assert="ok(main.includes(\"const allowed=['today','next','focus','focusweek','goal','countdown','calendar','week','month','quadrant','mood','review','stats','joy','clock','fortune']\"),'sixteen widgets');"
 if old_widget_assert in test:
     test=test.replace(old_widget_assert,new_widget_assert,1)
 
-test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes(\"['month',tr('Month planner'\"),'month planner widget');ok(app.includes(\"['focusweek',tr('Focus week'\"),'weekly focus widget');ok(main.includes(\"'clock','fortune'\"),'extended widget process allowlist');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
+test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes(\"['month',tr('Month planner'\"),'month planner widget');ok(app.includes(\"['focusweek',tr('Focus week'\"),'weekly focus widget');ok(main.includes(\"'clock'\")&&main.includes(\"'fortune'\")&&main.includes(\"'focusweek'\"),'extended widget allowlist');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
 
 (root/'renderer/app.js').write_text(app)
 (root/'main.js').write_text(main)

@@ -1,0 +1,89 @@
+name: PlanJoy R7.5 Split Certified Delivery
+
+on:
+  push:
+    branches: [tmp-planjoy-r75-functional]
+    paths:
+      - '.github/workflows/planjoy-r75-split-ci-artifact.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  split:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    env:
+      SOURCE_RUN_ID: '33371778780'
+      SOURCE_ARTIFACT: 'planjoy-r75-ci-certified-placeholder'
+      SETUP_NAME: 'PlanJoyR75-Windows-Setup-x64-v0.7.5-CI.exe'
+      PORTABLE_NAME: 'PlanJoyR75-Windows-x64-v0.7.5-CI-Portable.zip'
+      SOURCE_NAME: 'PlanJoyR75-Source-v0.7.5-Clean.zip'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download complete certified delivery from successful run
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: bundle
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Locate and stage individual deliverables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $setup=Get-ChildItem bundle -Recurse -File -Filter $env:SETUP_NAME | Select-Object -First 1
+          $portable=Get-ChildItem bundle -Recurse -File -Filter $env:PORTABLE_NAME | Select-Object -First 1
+          $source=Get-ChildItem bundle -Recurse -File -Filter $env:SOURCE_NAME | Select-Object -First 1
+          if(!$setup){throw 'certified setup not found'}
+          if(!$portable){throw 'certified portable not found'}
+          if(!$source){throw 'certified source not found'}
+          foreach($d in @('split/setup','split/portable','split/source','split/certification')){New-Item $d -ItemType Directory -Force | Out-Null}
+          Copy-Item $setup.FullName split/setup/
+          Copy-Item $portable.FullName split/portable/
+          Copy-Item $source.FullName split/source/
+          foreach($name in @('CI-CERTIFICATION.json','SHA256SUMS-CI.txt','r75-contract.log','r75-ui-runtime.log','r75-functional-runtime.log','r75-installed-functional.log','r75-route-captures.zip')){
+            $f=Get-ChildItem bundle -Recurse -File -Filter $name | Select-Object -First 1
+            if($f){Copy-Item $f.FullName split/certification/}
+          }
+          Get-ChildItem split -Recurse -File | ForEach-Object {"$($_.FullName) $($_.Length)"}
+
+      - name: Upload setup only
+        uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-certified-setup-ci
+          path: split/setup/*
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload portable only
+        uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-certified-portable-ci
+          path: split/portable/*
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload clean source only
+        uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-certified-source-ci
+          path: split/source/*
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload certification evidence only
+        uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-certification-evidence-ci
+          path: split/certification/*
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error

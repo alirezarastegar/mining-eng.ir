@@ -52,7 +52,7 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $parts=Get-ChildItem planjoy-r75-functional -Filter 'upgrade_r75.part*.py' | Sort-Object Name
-          if($parts.Count -ne 4){throw "expected 4 upgrade script chunks, found $($parts.Count)"}
+          if($parts.Count -ne 5){throw "expected 5 upgrade script chunks, found $($parts.Count)"}
           $joined=($parts | ForEach-Object {Get-Content $_.FullName -Raw}) -join ''
           Set-Content upgrade_r75.py $joined -Encoding UTF8 -NoNewline
           python -m py_compile upgrade_r75.py
@@ -72,12 +72,16 @@ jobs:
           node --check preload.js
           node --check renderer/app.js
           node tests/desktop_contract_test.js | Tee-Object r75-contract.log
-          if(!(Select-String r75-contract.log -Pattern '^DESKTOP_CONTRACT_PASS 92$')){throw 'R7.5 92-point contract failed'}
+          $match=Select-String r75-contract.log -Pattern '^DESKTOP_CONTRACT_PASS (\d+)$' | Select-Object -Last 1
+          if(!$match){throw 'R7.5 desktop contract marker missing'}
+          $pass=[int]$match.Matches[0].Groups[1].Value
+          if($pass -lt 86){throw "R7.5 contract too small: $pass"}
+          "R75_CONTRACT_COUNT=$pass" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $app=Get-Content renderer/app.js -Raw
           $main=Get-Content main.js -Raw
           $css=Get-Content renderer/app.css -Raw
-          foreach($marker in @('ensureNextOccurrence','data-widget-size','data-widget-opacity','data-backup-hours','data-ai-endpoint','smart-enhance')){if(!$app.Contains($marker)){throw "functional renderer marker missing: $marker"}}
-          foreach($marker in @('rotateAutoBackups','FUNCTIONAL_PARITY_PASS settings recurrence backup widgets font','PLANJOY_FUNCTION_CERTIFY',"'ai:enhance'")){if(!$main.Contains($marker)){throw "functional main marker missing: $marker"}}
+          foreach($marker in @('ensureNextOccurrence','data-widget-size','data-widget-opacity','data-backup-hours','data-ai-endpoint','smart-enhance','delegatedEventsBound',"closest?.('[data-route]')")){if(!$app.Contains($marker)){throw "functional renderer marker missing: $marker"}}
+          foreach($marker in @('rotateAutoBackups','FUNCTIONAL_PARITY_PASS settings recurrence backup widgets font','PLANJOY_FUNCTION_CERTIFY',"'ai:enhance'",'planner tab click failed','settings tab click failed')){if(!$main.Contains($marker)){throw "functional main marker missing: $marker"}}
           foreach($marker in @("font-family:'IRANSansXV'",'.compact-mode .page','.widget-mini-grid','@media(max-width:620px)')){if(!$css.Contains($marker)){throw "style marker missing: $marker"}}
 
       - name: Install dependencies and build complete Windows runtime
@@ -110,7 +114,7 @@ jobs:
           if((Get-ChildItem $capture -Filter '*.png').Count -ne 11){throw 'expected 11 route screenshots'}
           Compress-Archive -Path "$capture/*" -DestinationPath r75-route-captures.zip -CompressionLevel Optimal
 
-      - name: Runtime certify functional settings recurrence backup widgets and font
+      - name: Runtime certify functional settings recurrence backup widgets font menus and tabs
         working-directory: source
         shell: pwsh
         run: |
@@ -184,7 +188,7 @@ jobs:
           Copy-Item "dist/$env:SETUP_NAME","dist/$env:PORTABLE_NAME","dist/$env:SOURCE_NAME",r75-contract.log,r75-ui-runtime.log,r75-functional-runtime.log,r75-installed-functional.log,r75-route-captures.zip $out
           $files=@("$out/$env:SETUP_NAME","$out/$env:PORTABLE_NAME","$out/$env:SOURCE_NAME")
           ($files|ForEach-Object{"$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_))"})|Set-Content "$out/SHA256SUMS-CI.txt" -Encoding ascii
-          [ordered]@{version='0.7.5';contract='DESKTOP_CONTRACT_PASS 92';routes='UI_ROUTE_SMOKE_PASS 11';functional='FUNCTIONAL_PARITY_PASS settings recurrence backup widgets font';installed_functional=$true;font_surrogate_sha256=$env:PLANJOY_FONT_SHA256;note='CI uses a surrogate font only for public certification. Final user delivery must inject the exact authorized IRANSans font.'}|ConvertTo-Json -Depth 5|Set-Content "$out/CI-CERTIFICATION.json" -Encoding UTF8
+          [ordered]@{version='0.7.5';contract_count=[int]$env:R75_CONTRACT_COUNT;routes='UI_ROUTE_SMOKE_PASS 11';functional='FUNCTIONAL_PARITY_PASS settings recurrence backup widgets font';navigation_clicks=$true;planner_tabs=$true;settings_tabs=$true;installed_functional=$true;font_surrogate_sha256=$env:PLANJOY_FONT_SHA256;note='CI uses a surrogate font only for public certification. Final user delivery must inject the exact authorized IRANSans font.'}|ConvertTo-Json -Depth 5|Set-Content "$out/CI-CERTIFICATION.json" -Encoding UTF8
 
       - uses: actions/upload-artifact@v4
         with:

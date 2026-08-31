@@ -1,0 +1,195 @@
+name: PlanJoy R7.5 Functional Parity Certification
+
+on:
+  push:
+    branches: [tmp-planjoy-r75-functional]
+    paths:
+      - 'planjoy-r75-functional/**'
+      - '.github/workflows/planjoy-r75-functional-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  VERSION: '0.7.5'
+  R74_TAG: 'planjoy-r74-v0.7.4-cozy-ui'
+  R74_SOURCE: 'PlanJoyR74-Source-v0.7.4.zip'
+  SETUP_NAME: 'PlanJoyR75-Windows-Setup-x64-v0.7.5-CI.exe'
+  PORTABLE_NAME: 'PlanJoyR75-Windows-x64-v0.7.5-CI-Portable.zip'
+  SOURCE_NAME: 'PlanJoyR75-Source-v0.7.5-Clean.zip'
+
+jobs:
+  certify:
+    runs-on: windows-2025
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+
+      - name: Download certified R7.4 source baseline
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh release download $env:R74_TAG --repo $env:GITHUB_REPOSITORY --pattern $env:R74_SOURCE --dir baseline
+          Expand-Archive "baseline/$env:R74_SOURCE" source -Force
+          if(!(Test-Path source/main.js)){throw 'R7.4 source baseline missing main.js'}
+          if(!(Test-Path source/renderer/app.js)){throw 'R7.4 renderer source missing'}
+
+      - name: Assemble R7.5 upgrade script and inject CI font surrogate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $parts=Get-ChildItem planjoy-r75-functional -Filter 'upgrade_r75.part*.py' | Sort-Object Name
+          if($parts.Count -ne 4){throw "expected 4 upgrade script chunks, found $($parts.Count)"}
+          $joined=($parts | ForEach-Object {Get-Content $_.FullName -Raw}) -join ''
+          Set-Content upgrade_r75.py $joined -Encoding UTF8 -NoNewline
+          python -m py_compile upgrade_r75.py
+          $font='C:\Windows\Fonts\arial.ttf'
+          if(!(Test-Path $font)){throw 'CI font surrogate missing'}
+          python upgrade_r75.py source $font
+          $env:PLANJOY_FONT_SHA256=(Get-FileHash source/assets/fonts/IRANSansXVF.ttf -Algorithm SHA256).Hash.ToLowerInvariant()
+          "PLANJOY_FONT_SHA256=$env:PLANJOY_FONT_SHA256" >> $env:GITHUB_ENV
+          if((Get-Content source/package.json -Raw | ConvertFrom-Json).version -ne '0.7.5'){throw 'version patch failed'}
+
+      - name: Static source, behavior and style contract
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check main.js
+          node --check preload.js
+          node --check renderer/app.js
+          node tests/desktop_contract_test.js | Tee-Object r75-contract.log
+          if(!(Select-String r75-contract.log -Pattern '^DESKTOP_CONTRACT_PASS 92$')){throw 'R7.5 92-point contract failed'}
+          $app=Get-Content renderer/app.js -Raw
+          $main=Get-Content main.js -Raw
+          $css=Get-Content renderer/app.css -Raw
+          foreach($marker in @('ensureNextOccurrence','data-widget-size','data-widget-opacity','data-backup-hours','data-ai-endpoint','smart-enhance')){if(!$app.Contains($marker)){throw "functional renderer marker missing: $marker"}}
+          foreach($marker in @('rotateAutoBackups','FUNCTIONAL_PARITY_PASS settings recurrence backup widgets font','PLANJOY_FUNCTION_CERTIFY',"'ai:enhance'")){if(!$main.Contains($marker)){throw "functional main marker missing: $marker"}}
+          foreach($marker in @("font-family:'IRANSansXV'",'.compact-mode .page','.widget-mini-grid','@media(max-width:620px)')){if(!$css.Contains($marker)){throw "style marker missing: $marker"}}
+
+      - name: Install dependencies and build complete Windows runtime
+        working-directory: source
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          $ErrorActionPreference='Stop'
+          npm install --no-audit --no-fund
+          npm run build:win
+          $app='dist/win-unpacked/PlanJoy.exe'
+          if(!(Test-Path $app)){throw 'PlanJoy.exe missing'}
+          if((Get-Item $app).Length -lt 50MB){throw "runtime executable unexpectedly small: $((Get-Item $app).Length)"}
+          foreach($relative in @('resources/app/main.js','resources/app/preload.js','resources/app/renderer/app.js','resources/app/renderer/app.css','resources/app/assets/fonts/IRANSansXVF.ttf')){if(!(Test-Path (Join-Path 'dist/win-unpacked' $relative))){throw "runtime member missing: $relative"}}
+
+      - name: Runtime certify all routes
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $capture=Join-Path $env:RUNNER_TEMP 'r75-route-captures'
+          New-Item $capture -ItemType Directory -Force | Out-Null
+          $env:PLANJOY_UI_CERTIFY='1'
+          $env:PLANJOY_UI_CAPTURE_DIR=$capture
+          $p=Start-Process 'dist/win-unpacked/PlanJoy.exe' -ArgumentList '--disable-gpu' -Wait -PassThru -RedirectStandardOutput r75-ui-runtime.log -RedirectStandardError r75-ui-runtime.err
+          Remove-Item Env:PLANJOY_UI_CERTIFY,Env:PLANJOY_UI_CAPTURE_DIR -ErrorAction SilentlyContinue
+          if($p.ExitCode -ne 0){Get-Content r75-ui-runtime.log,r75-ui-runtime.err -ErrorAction SilentlyContinue;throw "route runtime certification failed: $($p.ExitCode)"}
+          if(!(Select-String r75-ui-runtime.log -Pattern 'UI_ROUTE_SMOKE_PASS 11')){throw '11-route runtime PASS marker missing'}
+          if((Get-ChildItem $capture -Filter '*.png').Count -ne 11){throw 'expected 11 route screenshots'}
+          Compress-Archive -Path "$capture/*" -DestinationPath r75-route-captures.zip -CompressionLevel Optimal
+
+      - name: Runtime certify functional settings recurrence backup widgets and font
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:PLANJOY_FUNCTION_CERTIFY='1'
+          $p=Start-Process 'dist/win-unpacked/PlanJoy.exe' -ArgumentList '--disable-gpu' -Wait -PassThru -RedirectStandardOutput r75-functional-runtime.log -RedirectStandardError r75-functional-runtime.err
+          Remove-Item Env:PLANJOY_FUNCTION_CERTIFY -ErrorAction SilentlyContinue
+          if($p.ExitCode -ne 0){Get-Content r75-functional-runtime.log,r75-functional-runtime.err -ErrorAction SilentlyContinue;throw "functional runtime certification failed: $($p.ExitCode)"}
+          if(!(Select-String r75-functional-runtime.log -Pattern 'FUNCTIONAL_PARITY_PASS settings recurrence backup widgets font')){throw 'functional parity PASS marker missing'}
+
+      - name: Build full current-user installer and portable package
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Remove-Item installer/payload.zip -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath installer/payload.zip -CompressionLevel Optimal
+          Push-Location installer
+          try {
+            $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+            go build -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o "../dist/$env:SETUP_NAME" main.go
+          } finally {Pop-Location}
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath "dist/$env:PORTABLE_NAME" -CompressionLevel Optimal
+          foreach($f in @("dist/$env:SETUP_NAME","dist/$env:PORTABLE_NAME")){if(!(Test-Path $f)){throw "package missing: $f"};if((Get-Item $f).Length -lt 60MB){throw "package unexpectedly small: $f"}}
+
+      - name: Real installer lifecycle and installed functional certification
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-Process PlanJoy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          $setup=(Resolve-Path "dist/$env:SETUP_NAME").Path
+          $i=Start-Process $setup -ArgumentList '--silent','--no-launch' -Wait -PassThru
+          if($i.ExitCode -ne 0){throw "installer failed: $($i.ExitCode)"}
+          $dir=Join-Path $env:LOCALAPPDATA 'Programs/PlanJoy'
+          $installed=Join-Path $dir 'PlanJoy.exe';$un=Join-Path $dir 'PlanJoyUninstall.exe'
+          if(!(Test-Path $installed)){throw 'installed app missing'}
+          if(!(Test-Path $un)){throw 'uninstaller missing'}
+          if(!(Test-Path (Join-Path $dir 'resources/app/assets/fonts/IRANSansXVF.ttf'))){throw 'installed font asset missing'}
+          $env:PLANJOY_FUNCTION_CERTIFY='1'
+          $p=Start-Process $installed -ArgumentList '--disable-gpu' -Wait -PassThru -RedirectStandardOutput r75-installed-functional.log -RedirectStandardError r75-installed-functional.err
+          Remove-Item Env:PLANJOY_FUNCTION_CERTIFY -ErrorAction SilentlyContinue
+          if($p.ExitCode -ne 0){Get-Content r75-installed-functional.log,r75-installed-functional.err -ErrorAction SilentlyContinue;throw "installed functional certification failed: $($p.ExitCode)"}
+          if(!(Select-String r75-installed-functional.log -Pattern 'FUNCTIONAL_PARITY_PASS settings recurrence backup widgets font')){throw 'installed functional PASS marker missing'}
+          $u=Start-Process $un -ArgumentList '--uninstall','--silent' -Wait -PassThru
+          if($u.ExitCode -ne 0){throw "uninstall failed: $($u.ExitCode)"}
+
+      - name: Create clean source package without font binary
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $stage=Join-Path $env:RUNNER_TEMP 'PlanJoyR75-Clean-Source'
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $stage -ItemType Directory -Force | Out-Null
+          foreach($file in @('package.json','package-lock.json','main.js','preload.js','SOURCE_RECOVERY_MANIFEST.json','WINDOWS_DESKTOP_PARITY.md','Windows_Smoke_Check_R73.ps1')){if(Test-Path $file){Copy-Item $file $stage}}
+          foreach($dir in @('renderer','assets','tests','installer')){Copy-Item $dir (Join-Path $stage $dir) -Recurse -Force}
+          Remove-Item (Join-Path $stage 'installer/payload.zip') -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $stage 'assets/fonts/IRANSansXVF.ttf') -Force -ErrorAction SilentlyContinue
+          Set-Content (Join-Path $stage 'assets/fonts/README_FONT_INJECTION.txt') 'The release build embeds the user-supplied IRANSansXVF.ttf. The raw private font binary is intentionally excluded from this clean source archive. Place the authorized font at assets/fonts/IRANSansXVF.ttf before building.' -Encoding UTF8
+          if(Get-ChildItem $stage -Recurse -Filter '*.ttf' -ErrorAction SilentlyContinue){throw 'clean source unexpectedly contains TTF'}
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/$env:SOURCE_NAME" -CompressionLevel Optimal
+
+      - name: Assemble certification artifact
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $out='r75-ci-delivery';Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue;New-Item $out -ItemType Directory -Force | Out-Null
+          Copy-Item dist/win-unpacked (Join-Path $out 'win-unpacked') -Recurse -Force
+          Copy-Item "dist/$env:SETUP_NAME","dist/$env:PORTABLE_NAME","dist/$env:SOURCE_NAME",r75-contract.log,r75-ui-runtime.log,r75-functional-runtime.log,r75-installed-functional.log,r75-route-captures.zip $out
+          $files=@("$out/$env:SETUP_NAME","$out/$env:PORTABLE_NAME","$out/$env:SOURCE_NAME")
+          ($files|ForEach-Object{"$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_))"})|Set-Content "$out/SHA256SUMS-CI.txt" -Encoding ascii
+          [ordered]@{version='0.7.5';contract='DESKTOP_CONTRACT_PASS 92';routes='UI_ROUTE_SMOKE_PASS 11';functional='FUNCTIONAL_PARITY_PASS settings recurrence backup widgets font';installed_functional=$true;font_surrogate_sha256=$env:PLANJOY_FONT_SHA256;note='CI uses a surrogate font only for public certification. Final user delivery must inject the exact authorized IRANSans font.'}|ConvertTo-Json -Depth 5|Set-Content "$out/CI-CERTIFICATION.json" -Encoding UTF8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-ci-certified-placeholder
+          path: source/r75-ci-delivery/**
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error

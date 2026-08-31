@@ -1,0 +1,89 @@
+name: PlanJoy R7.5 Split Certified Artifact
+
+on:
+  push:
+    branches: [tmp-planjoy-r75-functional]
+    paths:
+      - '.github/workflows/planjoy-r75-split-certified.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  split:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the successful certified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p recovered split
+          gh run download 33371778780 --repo "$GITHUB_REPOSITORY" --name planjoy-r75-ci-certified-placeholder --dir recovered
+          find recovered -maxdepth 3 -type f -printf '%p %s\n' | sort
+
+      - name: Split runtime and delivery files
+        run: |
+          set -euo pipefail
+          setup=$(find recovered -type f -name 'PlanJoyR75-Windows-Setup-x64-v0.7.5-CI.exe' -print -quit)
+          portable=$(find recovered -type f -name 'PlanJoyR75-Windows-x64-v0.7.5-CI-Portable.zip' -print -quit)
+          source_zip=$(find recovered -type f -name 'PlanJoyR75-Source-v0.7.5-Clean.zip' -print -quit)
+          runtime_dir=$(find recovered -type d -name 'win-unpacked' -print -quit)
+          test -n "$setup" && test -n "$portable" && test -n "$source_zip" && test -n "$runtime_dir"
+          cp "$setup" split/
+          cp "$portable" split/
+          cp "$source_zip" split/
+          (cd "$runtime_dir" && zip -qr "$GITHUB_WORKSPACE/split/PlanJoyR75-Win-Unpacked-v0.7.5-CI.zip" .)
+          find recovered -maxdepth 3 -type f \( -name '*.log' -o -name '*.json' -o -name '*.txt' -o -name 'r75-route-captures.zip' \) -exec cp {} split/ \;
+          sha256sum split/* > split/SHA256SUMS-SPLIT.txt
+          ls -lh split
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-runtime-placeholder
+          path: split/PlanJoyR75-Win-Unpacked-v0.7.5-CI.zip
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-setup-placeholder
+          path: split/PlanJoyR75-Windows-Setup-x64-v0.7.5-CI.exe
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-portable-placeholder
+          path: split/PlanJoyR75-Windows-x64-v0.7.5-CI-Portable.zip
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-clean-source-split
+          path: split/PlanJoyR75-Source-v0.7.5-Clean.zip
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-certification-split
+          path: |
+            split/*.log
+            split/*.json
+            split/*.txt
+            split/r75-route-captures.zip
+            split/SHA256SUMS-SPLIT.txt
+          retention-days: 7
+          compression-level: 6
+          if-no-files-found: warn

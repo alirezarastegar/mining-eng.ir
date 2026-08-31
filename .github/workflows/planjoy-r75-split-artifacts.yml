@@ -1,0 +1,92 @@
+name: PlanJoy R7.5 Split Certified Artifact
+
+on:
+  push:
+    branches: [tmp-planjoy-r75-functional]
+    paths:
+      - '.github/workflows/planjoy-r75-split-artifacts.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  SOURCE_RUN_ID: '33371778780'
+
+jobs:
+  split:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r75-ci-certified-placeholder
+          path: certified
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+      - name: Inspect and verify certified source artifact
+        shell: bash
+        run: |
+          set -euxo pipefail
+          find certified -maxdepth 3 -type f -printf '%P|%s\n' | sort | tee certified-file-list.txt
+          test -f certified/CI-CERTIFICATION.json
+          test -d certified/win-unpacked
+          test -f certified/win-unpacked/PlanJoy.exe
+          test -f certified/win-unpacked/resources/app/main.js
+          test -f certified/win-unpacked/resources/app/renderer/app.js
+          test -f certified/win-unpacked/resources/app/assets/fonts/IRANSansXVF.ttf
+          grep -q '"navigation_clicks"[[:space:]]*:[[:space:]]*true' certified/CI-CERTIFICATION.json
+          grep -q '"planner_tabs"[[:space:]]*:[[:space:]]*true' certified/CI-CERTIFICATION.json
+          grep -q '"settings_tabs"[[:space:]]*:[[:space:]]*true' certified/CI-CERTIFICATION.json
+          grep -q '"widget_count"[[:space:]]*:[[:space:]]*16' certified/CI-CERTIFICATION.json
+      - name: Pack certified runtime for private exact-font finalization
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+          root=Path('certified/win-unpacked')
+          font=root/'resources/app/assets/fonts/IRANSansXVF.ttf'
+          m={
+            'source_run_id':'33371778780',
+            'runtime_exe_sha256':hashlib.sha256((root/'PlanJoy.exe').read_bytes()).hexdigest(),
+            'ci_font_sha256':hashlib.sha256(font.read_bytes()).hexdigest(),
+            'main_js_sha256':hashlib.sha256((root/'resources/app/main.js').read_bytes()).hexdigest(),
+            'renderer_js_sha256':hashlib.sha256((root/'resources/app/renderer/app.js').read_bytes()).hexdigest(),
+          }
+          Path('R75-CERTIFIED-RUNTIME-MANIFEST.json').write_text(json.dumps(m,indent=2)+'\n')
+          PY
+          zip -q -9 -r PlanJoyR75-Certified-Windows-Runtime.zip certified/win-unpacked R75-CERTIFIED-RUNTIME-MANIFEST.json certified/CI-CERTIFICATION.json certified/r75-contract.log certified/r75-functional-runtime.log certified/r75-installed-functional.log
+          ls -lh PlanJoyR75-Certified-Windows-Runtime.zip
+      - name: Collect source and certification files
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p source-pack diagnostics
+          cp certified/PlanJoyR75-Source-v0.7.5-Clean.zip source-pack/
+          cp certified/CI-CERTIFICATION.json source-pack/
+          cp certified/SHA256SUMS-CI.txt source-pack/
+          cp certified/r75-contract.log certified/r75-ui-runtime.log certified/r75-functional-runtime.log certified/r75-installed-functional.log diagnostics/
+          cp certified/r75-route-captures.zip diagnostics/
+          cp certified-file-list.txt diagnostics/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-certified-runtime
+          path: PlanJoyR75-Certified-Windows-Runtime.zip
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-certified-source-and-manifest
+          path: source-pack/**
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r75-certified-diagnostics
+          path: diagnostics/**
+          compression-level: 6
+          retention-days: 7

@@ -32,6 +32,11 @@ main=main.replace(old,new,1)
 main=main.replace("if(count!==10)throw new Error(`widget gallery count ${count}`);","if(count!==16)throw new Error(`widget gallery count ${count}`);",1)
 main=main.replace("const widgetTypes=['today','focus','goal','countdown','calendar','week','quadrant','mood','stats','joy'];","const widgetTypes=['today','next','focus','focusweek','goal','countdown','calendar','week','month','quadrant','mood','review','stats','joy','clock','fortune'];",1)
 
+old_widget_assert="ok(main.includes(\"['today','focus','goal','countdown','calendar','week','quadrant','mood','stats','joy']\"),'ten widgets');"
+new_widget_assert="ok(main.includes(\"['today','next','focus','focusweek','goal','countdown','calendar','week','month','quadrant','mood','review','stats','joy','clock','fortune']\"),'sixteen widgets');"
+if old_widget_assert in test:
+    test=test.replace(old_widget_assert,new_widget_assert,1)
+
 test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes(\"['month',tr('Month planner'\"),'month planner widget');ok(app.includes(\"['focusweek',tr('Focus week'\"),'weekly focus widget');ok(main.includes(\"'clock','fortune'\"),'extended widget process allowlist');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
 
 (root/'renderer/app.js').write_text(app)

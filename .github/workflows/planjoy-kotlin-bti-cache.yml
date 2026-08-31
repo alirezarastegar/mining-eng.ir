@@ -1,0 +1,25 @@
+name: PlanJoy Kotlin BTI Cache
+on:
+  push:
+    branches: [planjoy-toolchain-20260831]
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Kotlin build tools impl 2.2.10
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          base='https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-build-tools-impl/2.2.10'
+          curl -fL "$base/kotlin-build-tools-impl-2.2.10.jar" -o out/kotlin-build-tools-impl-2.2.10.jar
+          curl -fL "$base/kotlin-build-tools-impl-2.2.10.pom" -o out/kotlin-build-tools-impl-2.2.10.pom
+          sha256sum out/* > out/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-kotlin-build-tools-impl-2.2.10
+          path: out/
+          if-no-files-found: error
+          retention-days: 1

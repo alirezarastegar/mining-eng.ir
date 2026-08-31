@@ -1,0 +1,198 @@
+name: PlanJoy R7.4 Cozy UI Windows Release
+
+on:
+  push:
+    branches: [tmp-planjoy-r74-cozy-ui]
+    paths:
+      - 'planjoy-r74-ui/**'
+      - '.github/workflows/planjoy-r74-cozy-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  BASE_RUN_ID: '33363332852'
+  VERSION: '0.7.4'
+  TAG: 'planjoy-r74-v0.7.4-cozy-ui'
+  SETUP_NAME: 'PlanJoyR74-Windows-Setup-x64-v0.7.4.exe'
+  PORTABLE_NAME: 'PlanJoyR74-Windows-x64-v0.7.4-Portable.zip'
+  SOURCE_NAME: 'PlanJoyR74-Source-v0.7.4.zip'
+  SCREENSHOTS_NAME: 'PlanJoyR74-UI-Certification-Screenshots.zip'
+
+jobs:
+  build-test-release:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: planjoy-r73-public-release-files-v5
+          path: base
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.BASE_RUN_ID }}
+
+      - name: Extract R7.3 certified source and apply R7.4 UI patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Remove-Item source,dist,ui-cert -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item source,dist,ui-cert -ItemType Directory -Force | Out-Null
+          Expand-Archive "base/PlanJoyR73-Source-v0.7.3.zip" source -Force
+          python planjoy-r74-ui/apply_r74.py source planjoy-r74-ui/cozy-r74.css
+          node --check source/main.js
+          node --check source/preload.js
+          node --check source/renderer/app.js
+
+      - name: Regression and R7.4 renderer crash gates
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          node tests/desktop_contract_test.js | Tee-Object desktop-contract-r74.log
+          if(!(Select-String desktop-contract-r74.log -Pattern '^DESKTOP_CONTRACT_PASS 69$')){throw 'base 69-point desktop contract failed'}
+          $app=Get-Content renderer/app.js -Raw
+          $css=Get-Content renderer/app.css -Raw
+          $main=Get-Content main.js -Raw
+          foreach($needle in @('const clamp=','render-error','page-end-art','page-${route} page-enter')){if(!$app.Contains($needle)){throw "R7.4 app marker missing: $needle"}}
+          foreach($needle in @('R7.4 — Cozy Motion UI','body[data-route="goals"]','@keyframes mascotFloat','@keyframes cozyPageIn','prefers-reduced-motion')){if(!$css.Contains($needle)){throw "R7.4 css marker missing: $needle"}}
+          if(!$main.Contains('UI_ROUTE_SMOKE_PASS')){throw 'route certification hook missing'}
+          if($app -notmatch 'function renderGoals\('){throw 'Goals renderer missing'}
+          if($app -match 'function renderGoals\(\).*undefined'){throw 'invalid Goals renderer'}
+          Write-Host 'R74_STATIC_UI_GATES_PASS 11'
+
+      - name: Install desktop dependencies and build complete x64 runtime
+        working-directory: source
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          $ErrorActionPreference='Stop'
+          npm install --no-audit --no-fund
+          npm run build:win
+          if(!(Test-Path 'dist/win-unpacked/PlanJoy.exe')){throw 'PlanJoy.exe missing'}
+          if((Get-Item 'dist/win-unpacked/PlanJoy.exe').Length -lt 50MB){throw 'Electron runtime unexpectedly small'}
+
+      - name: Runtime certify all 11 navigation routes and capture screenshots
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:PLANJOY_UI_CERTIFY='1'
+          $env:PLANJOY_UI_CAPTURE_DIR=(Resolve-Path 'ui-cert').Path
+          $exe=(Resolve-Path 'source/dist/win-unpacked/PlanJoy.exe').Path
+          $p=Start-Process $exe -ArgumentList '--disable-gpu' -Wait -PassThru
+          if($p.ExitCode -ne 0){throw "UI route certification failed with exit $($p.ExitCode)"}
+          $result='ui-cert/ui-route-results.json'
+          if(!(Test-Path $result)){throw 'route certification result missing'}
+          $routes=Get-Content $result -Raw | ConvertFrom-Json
+          if(@($routes).Count -ne 11){throw "expected 11 certified routes, got $(@($routes).Count)"}
+          foreach($r in $routes){if($r.error -or !$r.head -or $r.text.Length -lt 12){throw "route failed: $($r.route)"}}
+          foreach($route in 'today','calendar','goals','focus','review','stats','countdown','widgets','joy','smart','settings'){if(!(Test-Path "ui-cert/$route.png")){throw "screenshot missing: $route"}}
+          Write-Host 'R74_UI_ROUTE_CERTIFICATION_PASS 11'
+          Remove-Item Env:PLANJOY_UI_CERTIFY,Env:PLANJOY_UI_CAPTURE_DIR -ErrorAction SilentlyContinue
+
+      - name: Build real per-user installer portable and source packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Remove-Item 'source/installer/payload.zip' -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path source/dist/win-unpacked/* -DestinationPath source/installer/payload.zip -CompressionLevel Optimal
+          Push-Location source/installer
+          try {
+            $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+            go build -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o "../../dist/$env:SETUP_NAME" main.go
+          } finally {Pop-Location}
+          Compress-Archive -Path source/dist/win-unpacked/* -DestinationPath "dist/$env:PORTABLE_NAME" -CompressionLevel Optimal
+          $sourceStage=Join-Path $env:RUNNER_TEMP 'PlanJoyR74-Source'
+          Remove-Item $sourceStage -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item source $sourceStage -Recurse -Force
+          Remove-Item (Join-Path $sourceStage 'node_modules') -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $sourceStage 'dist') -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $sourceStage 'installer/payload.zip') -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$sourceStage/*" -DestinationPath "dist/$env:SOURCE_NAME" -CompressionLevel Optimal
+          Compress-Archive -Path ui-cert/* -DestinationPath "dist/$env:SCREENSHOTS_NAME" -CompressionLevel Optimal
+          if((Get-Item "dist/$env:SETUP_NAME").Length -lt 60MB){throw 'setup unexpectedly small'}
+          if((Get-Item "dist/$env:PORTABLE_NAME").Length -lt 60MB){throw 'portable unexpectedly small'}
+
+      - name: Real install launch navigation and uninstall lifecycle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-Process PlanJoy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          $setup=(Resolve-Path "dist/$env:SETUP_NAME").Path
+          $i=Start-Process $setup -ArgumentList '--silent','--no-launch' -Wait -PassThru
+          if($i.ExitCode -ne 0){throw "installer failed: $($i.ExitCode)"}
+          $dir=Join-Path $env:LOCALAPPDATA 'Programs/PlanJoy'
+          $app=Join-Path $dir 'PlanJoy.exe'
+          $un=Join-Path $dir 'PlanJoyUninstall.exe'
+          if(!(Test-Path $app)){throw 'installed PlanJoy.exe missing'}
+          if(!(Test-Path $un)){throw 'installed uninstaller missing'}
+          if(!(Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlanJoy')){throw 'Apps & Features registration missing'}
+          $env:PLANJOY_UI_CERTIFY='1';$env:PLANJOY_UI_CAPTURE_DIR=(Resolve-Path 'ui-cert').Path
+          $p=Start-Process $app -ArgumentList '--disable-gpu' -Wait -PassThru
+          if($p.ExitCode -ne 0){throw "installed UI certification failed: $($p.ExitCode)"}
+          Remove-Item Env:PLANJOY_UI_CERTIFY,Env:PLANJOY_UI_CAPTURE_DIR -ErrorAction SilentlyContinue
+          $u=Start-Process $un -ArgumentList '--uninstall','--silent' -Wait -PassThru
+          if($u.ExitCode -ne 0){throw "uninstall failed: $($u.ExitCode)"}
+          Write-Host 'R74_INSTALL_LIFECYCLE_PASS'
+
+      - name: Checksums and release notes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $files=@("dist/$env:SETUP_NAME","dist/$env:PORTABLE_NAME","dist/$env:SOURCE_NAME","dist/$env:SCREENSHOTS_NAME")
+          ($files|ForEach-Object{"$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_))"})|Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          @"
+          PlanJoy R7.4 Cozy UI Windows x64
+
+          - Fixed the blank Goals/Review/Statistics renderer crash caused by missing clamp().
+          - Added renderer error boundary so a single view can no longer leave the content area blank.
+          - Added section-specific pastel palettes, animated hero art, floating decorative shapes, top/bottom section ornaments, softer cards, animated navigation, progress shimmer and cute FAB motion.
+          - Preserved professional spacing, responsive layout and prefers-reduced-motion accessibility.
+          - Base desktop contract: PASS 69.
+          - All 11 navigation routes rendered successfully in Windows runtime certification.
+          - Direct runtime and installed runtime route sweep: PASS.
+          - Per-user install / launch / uninstall lifecycle: PASS.
+          - Version: 0.7.4
+          - Commit: $env:GITHUB_SHA
+          - Run: $env:GITHUB_RUN_ID
+          - Authenticode: unsigned; Windows SmartScreen may show Unknown Publisher.
+          "@ | Set-Content dist/README-FIRST.txt -Encoding UTF8
+          Get-ChildItem dist | Select-Object Name,Length | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-r74-cozy-ui-final
+          path: |
+            dist/${{ env.SETUP_NAME }}
+            dist/${{ env.PORTABLE_NAME }}
+            dist/${{ env.SOURCE_NAME }}
+            dist/${{ env.SCREENSHOTS_NAME }}
+            dist/SHA256SUMS.txt
+            dist/README-FIRST.txt
+          retention-days: 14
+          compression-level: 0
+
+      - name: Publish direct GitHub Release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY 2>$null
+          if($LASTEXITCODE -eq 0){gh release delete $env:TAG --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag}
+          gh release create $env:TAG --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title 'PlanJoy R7.4 Cozy UI Windows x64' --notes-file dist/README-FIRST.txt
+          gh release upload $env:TAG "dist/$env:SETUP_NAME" "dist/$env:PORTABLE_NAME" "dist/$env:SOURCE_NAME" "dist/$env:SCREENSHOTS_NAME" dist/SHA256SUMS.txt dist/README-FIRST.txt --repo $env:GITHUB_REPOSITORY --clobber
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json url,tagName,name,assets

@@ -3,6 +3,7 @@
 start=app.index('function bindGlobal(){')
 end=app.index('\nasync function persist', start)
 delegated=r'''let delegatedEventsBound=false;
+// legacy broad selector closest?.('[data-route]') is intentionally not used: body also owns data-route.
 function bindGlobal(){
   if(delegatedEventsBound)return;
   delegatedEventsBound=true;

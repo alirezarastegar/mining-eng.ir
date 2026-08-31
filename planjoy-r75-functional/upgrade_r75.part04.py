@@ -36,8 +36,12 @@ old_widget_assert="ok(main.includes(\"['today','focus','goal','countdown','calen
 new_widget_assert="ok(main.includes(\"const allowed=['today','next','focus','focusweek','goal','countdown','calendar','week','month','quadrant','mood','review','stats','joy','clock','fortune']\"),'sixteen widgets');"
 if old_widget_assert in test:
     test=test.replace(old_widget_assert,new_widget_assert,1)
+legacy_extended="ok(main.includes(\"'calendar','week','quadrant','mood','stats','joy'\"),'extended widget allowlist');"
+structural_extended="ok(['calendar','week','month','quadrant','mood','review','stats','joy','clock','fortune'].every(x=>main.includes(`'${x}'`)),'extended widget allowlist');"
+if legacy_extended in test:
+    test=test.replace(legacy_extended,structural_extended,1)
 
-test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes(\"['month',tr('Month planner'\"),'month planner widget');ok(app.includes(\"['focusweek',tr('Focus week'\"),'weekly focus widget');ok(main.includes(\"'clock'\")&&main.includes(\"'fortune'\")&&main.includes(\"'focusweek'\"),'extended widget allowlist');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
+test=test.replace("console.log(`DESKTOP_CONTRACT_PASS ${pass}`);","ok(app.includes(\"['month',tr('Month planner'\"),'month planner widget');ok(app.includes(\"['focusweek',tr('Focus week'\"),'weekly focus widget');ok(main.includes(\"'clock'\")&&main.includes(\"'fortune'\")&&main.includes(\"'focusweek'\"),'extended widget process allowlist');\nconsole.log(`DESKTOP_CONTRACT_PASS ${pass}`);",1)
 
 (root/'renderer/app.js').write_text(app)
 (root/'main.js').write_text(main)

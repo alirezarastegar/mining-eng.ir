@@ -10,30 +10,32 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-      - name: Prepare Maven project
+      - name: Prepare Gradle project
         run: |
           mkdir -p /tmp/pj-auth
-          cat > /tmp/pj-auth/pom.xml <<'EOF'
-          <project xmlns="http://maven.apache.org/POM/4.0.0">
-            <modelVersion>4.0.0</modelVersion>
-            <groupId>app.planjoy</groupId><artifactId>auth-cache</artifactId><version>1</version>
-            <repositories>
-              <repository><id>google</id><url>https://maven.google.com</url></repository>
-            </repositories>
-            <dependencies>
-              <dependency><groupId>com.google.android.gms</groupId><artifactId>play-services-auth</artifactId><version>21.4.0</version></dependency>
-            </dependencies>
-          </project>
+          cat > /tmp/pj-auth/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name='pj-auth-cache'
           EOF
+          cat > /tmp/pj-auth/build.gradle <<'EOF'
+          plugins { id 'base' }
+          configurations { authDeps }
+          dependencies { authDeps 'com.google.android.gms:play-services-auth:21.4.0' }
+          tasks.register('resolveAuth') { doLast { configurations.authDeps.files.each { println it } } }
+          EOF
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1.0'
       - name: Resolve dependencies
-        run: mvn -q -f /tmp/pj-auth/pom.xml dependency:go-offline
-      - name: Package local Maven repository
+        run: gradle -p /tmp/pj-auth resolveAuth --refresh-dependencies
+      - name: Package Gradle dependency cache
         run: |
-          cd "$HOME/.m2/repository"
-          zip -qr /tmp/planjoy-google-auth-m2.zip com/google/android/gms com/google/android/libraries com/google/auto com/google/code/findbugs javax/annotation org/checkerframework 2>/dev/null || true
-          test -s /tmp/planjoy-google-auth-m2.zip
+          cd "$HOME/.gradle/caches/modules-2"
+          zip -qr /tmp/planjoy-google-auth-gradle.zip files-2.1 metadata-* 2>/dev/null || true
+          test -s /tmp/planjoy-google-auth-gradle.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: planjoy-google-auth-m2
-          path: /tmp/planjoy-google-auth-m2.zip
+          name: planjoy-google-auth-gradle
+          path: /tmp/planjoy-google-auth-gradle.zip
           retention-days: 1

@@ -14,10 +14,9 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0" "platform-tools"
-          mkdir -p /tmp/pjbundle/gradle
           curl -fL --retry 4 https://services.gradle.org/distributions/gradle-9.5.0-bin.zip -o /tmp/gradle.zip
           echo '553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746  /tmp/gradle.zip' | sha256sum -c -
-          unzip -q /tmp/gradle.zip -d /tmp/pjbundle/gradle
+          mkdir -p /tmp/gradle && unzip -q /tmp/gradle.zip -d /tmp/gradle
       - name: Warm exact dependencies
         run: |
           mkdir -p /tmp/pjwarm/app/src/main/res/values
@@ -38,12 +37,22 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:theme="@style/AppTheme"/></manifest>
           EOF
           echo '<resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"/></resources>' > /tmp/pjwarm/app/src/main/res/values/styles.xml
-          /tmp/pjbundle/gradle/gradle-9.5.0/bin/gradle -p /tmp/pjwarm --no-daemon :app:dependencies :app:assembleRelease
-      - name: Stage
+          /tmp/gradle/gradle-9.5.0/bin/gradle -p /tmp/pjwarm --no-daemon :app:assembleRelease
+      - name: Package lean cache
         run: |
-          mkdir -p /tmp/pjbundle/android-sdk /tmp/pjbundle/gradle-user-home
-          cp -a "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" "$ANDROID_HOME/platform-tools" /tmp/pjbundle/android-sdk/
-          cp -a "$HOME/.gradle/caches" /tmp/pjbundle/gradle-user-home/
-          echo 'No PlanJoy source included.' > /tmp/pjbundle/README.txt
+          mkdir -p /tmp/pjcache
+          tar -C "$ANDROID_HOME" -czf /tmp/pjcache/android-sdk.tgz platforms/android-37.0 build-tools/36.0.0 platform-tools
+          tar -C /tmp -czf /tmp/pjcache/gradle-9.5.0.tgz gradle/gradle-9.5.0
+          cd "$HOME/.gradle"
+          ITEMS="caches/modules-2"
+          [ -d caches/9.5.0 ] && ITEMS="$ITEMS caches/9.5.0"
+          for d in caches/transforms-*; do [ -e "$d" ] && ITEMS="$ITEMS $d"; done
+          tar -czf /tmp/pjcache/gradle-cache.tgz $ITEMS
+          printf '%s\n' 'Public Android/Gradle build cache only. No PlanJoy source.' > /tmp/pjcache/README.txt
+          du -sh /tmp/pjcache/*
       - uses: actions/upload-artifact@v4
-        with: {name: planjoy-android-toolchain-cache, path: /tmp/pjbundle, compression-level: 6, retention-days: 1}
+        with:
+          name: planjoy-android-toolchain-cache-lean
+          path: /tmp/pjcache
+          compression-level: 0
+          retention-days: 1

@@ -13,7 +13,7 @@ jobs:
       - name: SDK and Gradle
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0" "platform-tools"
           mkdir -p /tmp/pjbundle/gradle
           curl -fL --retry 4 https://services.gradle.org/distributions/gradle-9.5.0-bin.zip -o /tmp/gradle.zip
           echo '553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746  /tmp/gradle.zip' | sha256sum -c -

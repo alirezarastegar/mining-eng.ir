@@ -8,7 +8,7 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch Kotlin build tools impl 2.2.10 with transitives
+      - name: Fetch Kotlin compiler build dependencies 2.2.10
         shell: bash
         run: |
           set -euo pipefail
@@ -16,12 +16,15 @@ jobs:
           mvn -q -Dmaven.repo.local="$PWD/m2" dependency:get \
             -Dartifact=org.jetbrains.kotlin:kotlin-build-tools-impl:2.2.10 \
             -Dtransitive=true
+          mvn -q -Dmaven.repo.local="$PWD/m2" dependency:get \
+            -Dartifact=org.jetbrains.kotlin:kotlin-compose-compiler-plugin-embeddable:2.2.10 \
+            -Dtransitive=true
           find m2 -type f \( -name '*.lastUpdated' -o -name '_remote.repositories' \) -delete
-          tar -C m2 -czf out/kotlin-bti-m2-2.2.10.tar.gz .
-          sha256sum out/kotlin-bti-m2-2.2.10.tar.gz > out/SHA256SUMS.txt
+          tar -C m2 -czf out/kotlin-compiler-m2-2.2.10.tar.gz .
+          sha256sum out/kotlin-compiler-m2-2.2.10.tar.gz > out/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: planjoy-kotlin-bti-m2-2.2.10
+          name: planjoy-kotlin-compiler-m2-2.2.10
           path: out/
           if-no-files-found: error
           retention-days: 1

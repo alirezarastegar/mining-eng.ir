@@ -38,21 +38,23 @@ jobs:
           EOF
           echo '<resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"/></resources>' > /tmp/pjwarm/app/src/main/res/values/styles.xml
           /tmp/gradle/gradle-9.5.0/bin/gradle -p /tmp/pjwarm --no-daemon :app:assembleRelease
-      - name: Package lean cache
+      - name: Package split cache
         run: |
           mkdir -p /tmp/pjcache
           tar -C "$ANDROID_HOME" -czf /tmp/pjcache/android-sdk.tgz platforms/android-37.0 build-tools/36.0.0 platform-tools
           tar -C /tmp -czf /tmp/pjcache/gradle-9.5.0.tgz gradle/gradle-9.5.0
           cd "$HOME/.gradle"
-          ITEMS="caches/modules-2"
-          [ -d caches/9.5.0 ] && ITEMS="$ITEMS caches/9.5.0"
+          tar -czf /tmp/pjcache/gradle-modules.tgz caches/modules-2
+          ITEMS=""
+          [ -d caches/9.5.0 ] && ITEMS="caches/9.5.0"
           for d in caches/transforms-*; do [ -e "$d" ] && ITEMS="$ITEMS $d"; done
-          tar -czf /tmp/pjcache/gradle-cache.tgz $ITEMS
-          printf '%s\n' 'Public Android/Gradle build cache only. No PlanJoy source.' > /tmp/pjcache/README.txt
+          tar -czf /tmp/pjcache/gradle-runtime-cache.tgz $ITEMS
           du -sh /tmp/pjcache/*
       - uses: actions/upload-artifact@v4
-        with:
-          name: planjoy-android-toolchain-cache-lean
-          path: /tmp/pjcache
-          compression-level: 0
-          retention-days: 1
+        with: {name: planjoy-sdk, path: /tmp/pjcache/android-sdk.tgz, compression-level: 0, retention-days: 1}
+      - uses: actions/upload-artifact@v4
+        with: {name: planjoy-gradle, path: /tmp/pjcache/gradle-9.5.0.tgz, compression-level: 0, retention-days: 1}
+      - uses: actions/upload-artifact@v4
+        with: {name: planjoy-gradle-modules, path: /tmp/pjcache/gradle-modules.tgz, compression-level: 0, retention-days: 1}
+      - uses: actions/upload-artifact@v4
+        with: {name: planjoy-gradle-runtime, path: /tmp/pjcache/gradle-runtime-cache.tgz, compression-level: 0, retention-days: 1}

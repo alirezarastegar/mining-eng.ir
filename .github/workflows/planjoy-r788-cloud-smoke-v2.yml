@@ -1,0 +1,42 @@
+name: PlanJoy R7.8.8 Cloud Smoke v2
+on:
+  push:
+    branches: [planjoy-toolchain-20260831]
+    paths: ['.github/workflows/planjoy-r788-cloud-smoke-v2.yml']
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: End-to-end Supabase relay smoke
+        env:
+          BASE: https://wkorbokxxorzdjfemyee.supabase.co/functions/v1/planjoy-sync
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.error, uuid, time, hashlib, secrets
+          base=os.environ['BASE']
+          def call(path, body=None, token=None, method='POST'):
+              headers={'Accept':'application/json'}; data=None
+              if body is not None: data=json.dumps(body).encode(); headers['Content-Type']='application/json'
+              if token: headers['Authorization']='Bearer '+token
+              req=urllib.request.Request(base+path,data=data,headers=headers,method=method)
+              try:
+                  with urllib.request.urlopen(req,timeout=20) as r:return r.status,r.read().decode()
+              except urllib.error.HTTPError as e:return e.code,e.read().decode()
+          sc,txt=call('/health',None,None,'GET'); print('HEALTH',sc,txt); assert sc==200
+          kid=hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:32]
+          sc,txt=call('/v2/accounts',{'key_id':kid}); print('CREATE',sc,txt); assert sc==201
+          c=json.loads(txt); acct=c['account_id']; token=c['token']; print('TEMP_ACCOUNT_ID='+acct)
+          opid=str(uuid.uuid4()); op={'op_id':opid,'device_id':'r788-win','entity_type':'task','entity_id':'r788-smoke','kind':1,'revision':1,'hlc_utc':int(time.time()),'hlc_counter':0,'payload':'ciphertext-smoke'}
+          win={'account_id':acct,'key_id':kid,'device':{'id':'r788-win','name':'R788 Windows','platform':'windows','app_version':'0.7.8+8'},'cursor':0,'ops':[op]}
+          sc,txt=call('/v2/sync',win,token); print('PUSH',sc,txt); assert sc==200 and opid in json.loads(txt)['accepted']
+          android={'account_id':acct,'key_id':kid,'device':{'id':'r788-android','name':'R788 Android','platform':'android','app_version':'0.7.8+8'},'cursor':0,'ops':[]}
+          sc,txt=call('/v2/sync',android,token); print('PULL',sc,txt); assert sc==200 and any(x['entity_id']=='r788-smoke' for x in json.loads(txt)['ops'])
+          bad=dict(android); bad['key_id']='0'*32
+          sc,txt=call('/v2/sync',bad,token); print('BAD_KEY',sc,txt); assert sc==409
+          sc,txt=call('/v2/devices/revoke',{'account_id':acct,'device_id':'r788-android'},token); print('REVOKE',sc,txt); assert sc==200
+          sc,txt=call('/v2/sync',android,token); print('REVOKED',sc,txt); assert sc==403
+          print('R788_CLOUD_SMOKE_PASS')
+          PY

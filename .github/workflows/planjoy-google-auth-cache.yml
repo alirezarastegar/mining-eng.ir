@@ -1,0 +1,41 @@
+name: PlanJoy Google Auth Cache
+on:
+  push:
+    branches: [planjoy-toolchain-20260831]
+    paths: ['.github/workflows/planjoy-google-auth-cache.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare Gradle project
+        run: |
+          mkdir -p /tmp/pj-auth
+          cat > /tmp/pj-auth/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name='pj-auth-cache'
+          EOF
+          cat > /tmp/pj-auth/build.gradle <<'EOF'
+          plugins { id 'base' }
+          configurations { authDeps }
+          dependencies { authDeps 'com.google.android.gms:play-services-auth:21.4.0' }
+          tasks.register('resolveAuth') { doLast { configurations.authDeps.files.each { println it } } }
+          EOF
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1.0'
+      - name: Resolve dependencies
+        run: gradle -p /tmp/pj-auth resolveAuth --refresh-dependencies
+      - name: Package Gradle dependency cache
+        run: |
+          cd "$HOME/.gradle/caches/modules-2"
+          zip -qr /tmp/planjoy-google-auth-gradle.zip files-2.1 metadata-* 2>/dev/null || true
+          test -s /tmp/planjoy-google-auth-gradle.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-google-auth-gradle
+          path: /tmp/planjoy-google-auth-gradle.zip
+          retention-days: 1

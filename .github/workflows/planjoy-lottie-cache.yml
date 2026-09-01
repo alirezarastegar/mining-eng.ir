@@ -1,0 +1,38 @@
+name: PlanJoy Lottie Cache
+on:
+  push:
+    branches: [planjoy-toolchain-20260831]
+    paths: ['.github/workflows/planjoy-lottie-cache.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve Lottie dependencies
+        run: |
+          mkdir -p /tmp/pj-lottie
+          cat > /tmp/pj-lottie/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name='pj-lottie'
+          EOF
+          cat > /tmp/pj-lottie/build.gradle <<'EOF'
+          plugins { id 'base' }
+          configurations { lottie }
+          dependencies { lottie 'com.airbnb.android:lottie:6.6.7' }
+          tasks.register('copyDeps', Copy) { from configurations.lottie; into '/tmp/pj-lottie/deps' }
+          EOF
+          gradle -p /tmp/pj-lottie copyDeps --no-daemon
+          ls -lh /tmp/pj-lottie/deps
+      - name: Package dependencies
+        run: |
+          cd /tmp/pj-lottie
+          zip -qr /tmp/planjoy-lottie-deps.zip deps
+          test -s /tmp/planjoy-lottie-deps.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planjoy-lottie-deps
+          path: /tmp/planjoy-lottie-deps.zip
+          retention-days: 1

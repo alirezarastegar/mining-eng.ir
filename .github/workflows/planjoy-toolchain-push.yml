@@ -1,0 +1,60 @@
+name: PlanJoy Android Cache Push
+on:
+  push:
+    branches: [ planjoy-toolchain-20260831 ]
+permissions:
+  contents: read
+jobs:
+  build-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - name: SDK and Gradle
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0" "platform-tools"
+          curl -fL --retry 4 https://services.gradle.org/distributions/gradle-9.5.0-bin.zip -o /tmp/gradle.zip
+          echo '553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746  /tmp/gradle.zip' | sha256sum -c -
+          mkdir -p /tmp/gradle && unzip -q /tmp/gradle.zip -d /tmp/gradle
+      - name: Warm exact dependencies
+        run: |
+          mkdir -p /tmp/pjwarm/app/src/main/res/values
+          cat > /tmp/pjwarm/settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name="PJCache"; include(":app")
+          EOF
+          cat > /tmp/pjwarm/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") version "9.3.0" apply false; id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false }
+          EOF
+          cat > /tmp/pjwarm/app/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application"); id("org.jetbrains.kotlin.plugin.compose") }
+          android { namespace="com.planjoy.cache"; compileSdk=37; defaultConfig { applicationId="com.planjoy.cache"; minSdk=26; targetSdk=37; versionCode=1; versionName="1" }; buildFeatures { compose=true }; compileOptions { sourceCompatibility=JavaVersion.VERSION_17; targetCompatibility=JavaVersion.VERSION_17 } }
+          dependencies { val bom=platform("androidx.compose:compose-bom:2026.08.00"); implementation(bom); androidTestImplementation(bom); implementation("androidx.activity:activity-compose:1.13.0"); implementation("androidx.compose.material3:material3"); implementation("androidx.compose.foundation:foundation"); implementation("androidx.compose.animation:animation"); implementation("androidx.compose.ui:ui"); implementation("androidx.compose.ui:ui-tooling-preview"); implementation("com.google.android.gms:play-services-code-scanner:16.1.0"); debugImplementation("androidx.compose.ui:ui-tooling") }
+          EOF
+          cat > /tmp/pjwarm/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:theme="@style/AppTheme"/></manifest>
+          EOF
+          echo '<resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"/></resources>' > /tmp/pjwarm/app/src/main/res/values/styles.xml
+          /tmp/gradle/gradle-9.5.0/bin/gradle -p /tmp/pjwarm --no-daemon :app:assembleRelease
+      - name: Package split cache
+        run: |
+          mkdir -p /tmp/pjcache
+          tar -C "$ANDROID_HOME" -czf /tmp/pjcache/android-sdk.tgz platforms/android-37.0 build-tools/36.0.0 platform-tools
+          tar -C /tmp -czf /tmp/pjcache/gradle-9.5.0.tgz gradle/gradle-9.5.0
+          cd "$HOME/.gradle"
+          tar -czf /tmp/pjcache/gradle-modules.tgz caches/modules-2
+          ITEMS=""
+          [ -d caches/9.5.0 ] && ITEMS="caches/9.5.0"
+          for d in caches/transforms-*; do [ -e "$d" ] && ITEMS="$ITEMS $d"; done
+          tar -czf /tmp/pjcache/gradle-runtime-cache.tgz $ITEMS
+          du -sh /tmp/pjcache/*
+      - uses: actions/upload-artifact@v4
+        with: {name: planjoy-sdk, path: /tmp/pjcache/android-sdk.tgz, compression-level: 0, retention-days: 1}
+      - uses: actions/upload-artifact@v4
+        with: {name: planjoy-gradle, path: /tmp/pjcache/gradle-9.5.0.tgz, compression-level: 0, retention-days: 1}
+      - uses: actions/upload-artifact@v4
+        with: {name: planjoy-gradle-modules, path: /tmp/pjcache/gradle-modules.tgz, compression-level: 0, retention-days: 1}
+      - uses: actions/upload-artifact@v4
+        with: {name: planjoy-gradle-runtime, path: /tmp/pjcache/gradle-runtime-cache.tgz, compression-level: 0, retention-days: 1}

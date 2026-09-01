@@ -21,7 +21,7 @@ jobs:
           cat > /tmp/pj-lottie/build.gradle <<'EOF'
           plugins { id 'base' }
           configurations { lottie }
-          dependencies { lottie 'com.airbnb.android:lottie-compose:6.6.7' }
+          dependencies { lottie 'com.airbnb.android:lottie:6.6.7' }
           tasks.register('copyDeps', Copy) { from configurations.lottie; into '/tmp/pj-lottie/deps' }
           EOF
           gradle -p /tmp/pj-lottie copyDeps --no-daemon

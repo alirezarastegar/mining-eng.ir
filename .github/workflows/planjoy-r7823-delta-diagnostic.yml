@@ -1,0 +1,21 @@
+name: PlanJoy R7.8.23 Delta Diagnostic
+on:
+  workflow_dispatch:
+  push:
+    branches: [tmp-planjoy-r7823-build]
+    paths: ['.github/workflows/planjoy-r7823-delta-diagnostic.yml']
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode, verify and list delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat planjoy-r7823-source/code/chunk*.b64 > /tmp/r7823-delta.b64
+          base64 -d /tmp/r7823-delta.b64 > /tmp/r7823-delta.tar.xz
+          sha256sum /tmp/r7823-delta.tar.xz
+          echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/r7823-delta.tar.xz' | sha256sum -c -
+          xz -t /tmp/r7823-delta.tar.xz
+          tar -tJf /tmp/r7823-delta.tar.xz

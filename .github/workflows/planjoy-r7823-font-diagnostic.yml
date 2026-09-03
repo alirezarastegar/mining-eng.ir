@@ -1,0 +1,25 @@
+name: PlanJoy R7.8.23 Font Binding Diagnostic
+on:
+  workflow_dispatch:
+  push:
+    branches: [tmp-planjoy-r7823-build]
+    paths: ['.github/workflows/planjoy-r7823-font-diagnostic.yml']
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect IranSans contract and bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat planjoy-r7823-source/code/chunk*.b64 > /tmp/src.b64
+          base64 -d /tmp/src.b64 > /tmp/src.tar.xz
+          echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/src.tar.xz' | sha256sum -c -
+          mkdir src && tar -xJf /tmp/src.tar.xz -C src
+          echo '--- CONTRACT ---'
+          sed -n '1,260p' src/tests/r7823_windows_parity_contract.py
+          echo '--- FONT REFERENCES ---'
+          grep -RniE 'IranSans|iransans|FontFamily|R\.font' src/app/src/main src/tests || true
+          echo '--- FONT DIRECTORY ---'
+          find src/app/src/main/res/font -maxdepth 1 -type f -printf '%f %s bytes\n' 2>/dev/null || true

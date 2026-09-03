@@ -1,0 +1,18 @@
+name: PlanJoy R7.8.23 Drive Cipher Probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [tmp-planjoy-r7823-build]
+    paths: ['.github/workflows/planjoy-r7823-drive-cipher-probe.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Probe encrypted payload download only
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://drive.usercontent.google.com/download?id=1-TWknjwNcukj4nTLjxpnkC0bkIZ61wsz&export=download&confirm=t'
+          code=$(curl -L -sS -o /tmp/font.encpkg -w '%{http_code}' "$URL" || true)
+          echo "HTTP=$code BYTES=$(wc -c < /tmp/font.encpkg 2>/dev/null || echo 0)"
+          if [ "$code" = 200 ]; then sha256sum /tmp/font.encpkg; fi

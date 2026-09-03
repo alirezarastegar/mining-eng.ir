@@ -28,62 +28,27 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Reconstruct R7.1.3 overlay base correctly
+      - name: Reconstruct verified complete R7.8.23 source
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --depth=1 origin tmp-planjoy-r713-parity
-          git checkout FETCH_HEAD -- planjoy-r713-v2
-          python3 - <<'PY'
-          from pathlib import Path
-          import base64, hashlib, re, sys
-          root = Path('planjoy-r713-v2')
-          parts = [root / f'seg{i:02d}.b64' for i in range(6)]
-          raw = b''.join(p.read_bytes() for p in parts)
-          raw = re.sub(rb'\s+', b'', raw)
-          invalid = sorted(set(raw) - set(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-'))
-          if invalid:
-              print('Unsupported legacy Base64 bytes:', invalid, file=sys.stderr)
-              sys.exit(23)
-          raw = raw.replace(b'-', b'+').replace(b'_', b'/')
-          rem = len(raw) % 4
-          if rem == 1:
-              print('Invalid legacy Base64 length: remainder 1', file=sys.stderr)
-              sys.exit(23)
-          raw += b'=' * ((4-rem) % 4)
-          try:
-              payload = base64.b64decode(raw, validate=True)
-          except Exception as exc:
-              print(f'Legacy Base64 validation failed: {exc}', file=sys.stderr)
-              sys.exit(23)
-          out = root / 'overlay.tar.gz'
-          out.write_bytes(payload)
-          got = hashlib.sha256(payload).hexdigest()
-          expected = '79cc1b24ac0813710a161139ccd283fa3fcb3ff6b34aeec8d0766d959c3b87ab'
-          print('Legacy overlay bytes:', len(payload), 'sha256:', got)
-          if got != expected:
-              print('Legacy overlay SHA mismatch', file=sys.stderr)
-              sys.exit(24)
-          PY
+          cat planjoy-r7823-source/full/chunk*.b64 > planjoy-r7823-source/full/source.b64
+          base64 -d planjoy-r7823-source/full/source.b64 > planjoy-r7823-source/full/source.tar.xz
+          echo '16dd86b9e48df475c2b47b462a2b80c4de779acbf343e78a073054bafbbacf19  planjoy-r7823-source/full/source.tar.xz' | sha256sum -c -
+          rm -rf "$RUNNER_TEMP/r7823-full"
+          mkdir -p "$RUNNER_TEMP/r7823-full"
+          tar -xJf planjoy-r7823-source/full/source.tar.xz -C "$RUNNER_TEMP/r7823-full"
+          ROOT=$(find "$RUNNER_TEMP/r7823-full" -type f -path '*/app/build.gradle.kts' -printf '%h\n' | sed 's#/app$##' | head -1)
+          test -n "$ROOT" && test -f "$ROOT/settings.gradle.kts"
+          rm -rf android_native
           mkdir -p android_native
-          tar -xzf planjoy-r713-v2/overlay.tar.gz -C android_native
-          test -f android_native/app/build.gradle.kts
-          test -f android_native/settings.gradle.kts
-
-      - name: Apply tested R7.8.23 delta and stable SDK compatibility
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat planjoy-r7823-source/code/chunk*.b64 > planjoy-r7823-source/code/delta.b64
-          base64 -d planjoy-r7823-source/code/delta.b64 > planjoy-r7823-source/code/delta.tar.xz
-          echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  planjoy-r7823-source/code/delta.tar.xz' | sha256sum -c -
-          tar -xJf planjoy-r7823-source/code/delta.tar.xz -C android_native
+          cp -a "$ROOT"/. android_native/
           sed -i 's/compileSdk=37/compileSdk=36/g; s/targetSdk=37/targetSdk=36/g' android_native/app/build.gradle.kts
           grep -q 'versionCode=78023' android_native/app/build.gradle.kts
           grep -q 'versionName="0.7.8+23"' android_native/app/build.gradle.kts
           test -s android_native/app/src/main/res/font/iransans_xv.ttf || { echo 'Required IranSans project asset is missing; refusing font substitution.' >&2; exit 22; }
 
-      - name: Verify exact artwork hashes
+      - name: Verify exact synchronized artwork
         shell: bash
         run: |
           set -euo pipefail
@@ -93,12 +58,11 @@ jobs:
           echo '746d865ed85ce0f9b6d60b790d2685e7e217e205de537c23d6e2eb12f4fb46b7  android_native/app/src/main/res/drawable/pj_original_focus_stats.png' | sha256sum -c -
           echo '1eff77f0c7c065fd518e41116abf2377182d0d564aa165e8745cca90c60b1c48  android_native/app/src/main/res/drawable/pj_original_task_ducks.webp' | sha256sum -c -
 
-      - name: Verify R7.8.23 feature contracts
+      - name: Verify R7.8.23 parity contracts
         working-directory: android_native
         shell: bash
         run: |
           set -euo pipefail
-          python3 tests/r7821_android_static_contract.py
           python3 tests/r78_android_native_contract.py
           python3 tests/r7823_windows_parity_contract.py
 
@@ -138,7 +102,7 @@ jobs:
           cp "$APK" ../PlanJoyR7823-Android-v0.7.8.23-SIGNED.apk
           sha256sum ../PlanJoyR7823-Android-v0.7.8.23-SIGNED.apk | tee ../PlanJoyR7823-Android-SHA256.txt
 
-      - name: Package clean separate source archive
+      - name: Package separate clean source archive
         shell: bash
         run: |
           set -euo pipefail

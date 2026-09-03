@@ -34,11 +34,14 @@ jobs:
           set -euo pipefail
           git fetch --depth=1 origin tmp-planjoy-r713-parity
           git checkout FETCH_HEAD -- planjoy-r713-v2
-          : > planjoy-r713-v2/overlay.tar.gz
-          for f in seg00.b64 seg01.b64 seg02.b64 seg03.b64 seg04.b64 seg05.b64; do
-            test -s "planjoy-r713-v2/$f"
-            tr -d '\r\n\t ' < "planjoy-r713-v2/$f" | base64 -d >> planjoy-r713-v2/overlay.tar.gz
-          done
+          cat planjoy-r713-v2/seg00.b64 planjoy-r713-v2/seg01.b64 planjoy-r713-v2/seg02.b64 planjoy-r713-v2/seg03.b64 planjoy-r713-v2/seg04.b64 planjoy-r713-v2/seg05.b64 | tr -d '\r\n\t ' > planjoy-r713-v2/overlay.b64
+          case $(( $(wc -c < planjoy-r713-v2/overlay.b64) % 4 )) in
+            0) ;;
+            2) printf '==' >> planjoy-r713-v2/overlay.b64 ;;
+            3) printf '=' >> planjoy-r713-v2/overlay.b64 ;;
+            *) echo 'Invalid legacy Base64 length: impossible remainder 1' >&2; exit 23 ;;
+          esac
+          base64 -d planjoy-r713-v2/overlay.b64 > planjoy-r713-v2/overlay.tar.gz
           echo '79cc1b24ac0813710a161139ccd283fa3fcb3ff6b34aeec8d0766d959c3b87ab  planjoy-r713-v2/overlay.tar.gz' | sha256sum -c -
           mkdir -p android_native
           tar -xzf planjoy-r713-v2/overlay.tar.gz -C android_native
@@ -113,15 +116,34 @@ jobs:
           cp "$APK" ../PlanJoyR7823-Android-v0.7.8.23-SIGNED.apk
           sha256sum ../PlanJoyR7823-Android-v0.7.8.23-SIGNED.apk | tee ../PlanJoyR7823-Android-SHA256.txt
 
+      - name: Package clean separate source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/PlanJoyR7823-Android-Source"
+          cp -a android_native "$RUNNER_TEMP/PlanJoyR7823-Android-Source"
+          find "$RUNNER_TEMP/PlanJoyR7823-Android-Source" -type d \( -name build -o -name .gradle \) -prune -exec rm -rf {} +
+          find "$RUNNER_TEMP/PlanJoyR7823-Android-Source" -type f \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.p12' -o -iname '*.jks' -o -iname '*.keystore' \) -delete
+          cat > "$RUNNER_TEMP/PlanJoyR7823-Android-Source/FONT-ASSET-NOT-INCLUDED.md" <<'EOF'
+          # Font asset
+          The binary font asset is intentionally not included in this source distribution.
+          The production build expects the authorized project font resource at app/src/main/res/font/iransans_xv.ttf.
+          No fallback font is substituted by the release workflow.
+          EOF
+          (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/PlanJoyR7823-Android-Source-v0.7.8.23.zip" PlanJoyR7823-Android-Source)
+          sha256sum PlanJoyR7823-Android-Source-v0.7.8.23.zip | tee PlanJoyR7823-Android-Source-SHA256.txt
+
       - uses: actions/upload-artifact@v4
         with:
-          name: PlanJoy-R7823-Android-signed
+          name: PlanJoy-R7823-Android-final
           retention-days: 7
           if-no-files-found: error
           compression-level: 0
           path: |
             PlanJoyR7823-Android-v0.7.8.23-SIGNED.apk
             PlanJoyR7823-Android-SHA256.txt
+            PlanJoyR7823-Android-Source-v0.7.8.23.zip
+            PlanJoyR7823-Android-Source-SHA256.txt
             r7823-badging.txt
             r7823-apksigner.txt
             android_native/app/build/reports/lint-results-productionRelease.html

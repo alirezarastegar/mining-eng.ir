@@ -19,11 +19,11 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - name: Install Android SDK 37 / Build Tools 36.0.0
+      - name: Install Android SDK 36 / Build Tools 36.0.0
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager 'platform-tools' 'platforms;android-37' 'build-tools;36.0.0'
+          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -45,7 +45,7 @@ jobs:
           test -f android_native/app/build.gradle.kts
           test -f android_native/settings.gradle.kts
 
-      - name: Apply tested R7.8.23 delta
+      - name: Apply tested R7.8.23 delta and stable SDK compatibility
         shell: bash
         run: |
           set -euo pipefail
@@ -53,12 +53,10 @@ jobs:
           base64 -d planjoy-r7823-source/code/delta.b64 > planjoy-r7823-source/code/delta.tar.xz
           echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  planjoy-r7823-source/code/delta.tar.xz' | sha256sum -c -
           tar -xJf planjoy-r7823-source/code/delta.tar.xz -C android_native
+          sed -i 's/compileSdk=37/compileSdk=36/g; s/targetSdk=37/targetSdk=36/g' android_native/app/build.gradle.kts
           grep -q 'versionCode=78023' android_native/app/build.gradle.kts
           grep -q 'versionName="0.7.8+23"' android_native/app/build.gradle.kts
-          test -f android_native/app/src/main/res/font/iransans_xv.ttf || {
-            mkdir -p android_native/app/src/main/res/font
-            cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf android_native/app/src/main/res/font/iransans_xv.ttf
-          }
+          test -s android_native/app/src/main/res/font/iransans_xv.ttf || { echo 'Required IranSans project asset is missing; refusing font substitution.' >&2; exit 22; }
 
       - name: Verify exact artwork hashes
         shell: bash

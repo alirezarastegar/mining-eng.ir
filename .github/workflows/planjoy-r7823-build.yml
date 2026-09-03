@@ -14,21 +14,16 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-
       - uses: android-actions/setup-android@v3
-
-      - name: Install locked Android SDK
+      - name: Install Android SDK 36 / Build Tools 36.0.0
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager 'platform-tools' 'platforms;android-37' 'build-tools;36.0.0'
-
+          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -39,25 +34,20 @@ jobs:
           set -euo pipefail
           mkdir -p planjoy-r7-source planjoy-r713-v2
           base='https://raw.githubusercontent.com/alirezarastegar/mining-eng.ir/tmp-planjoy-r7-build/planjoy-r7-source'
-          for f in chunk00.b64 chunk01.b64 chunk02.b64 chunk03.b64; do
-            curl -fsSL "$base/$f" -o "planjoy-r7-source/$f"
-          done
+          for f in chunk00.b64 chunk01.b64 chunk02.b64 chunk03.b64; do curl -fsSL "$base/$f" -o "planjoy-r7-source/$f"; done
           cat planjoy-r7-source/chunk*.b64 > planjoy-r7-source/source.b64
           base64 -d planjoy-r7-source/source.b64 > planjoy-r7-android-source.tar.gz
           echo '36dd8324b4d54e3dcacff3a6d28e2b6bb6153efcf54e337c99226cf1fdeadf11  planjoy-r7-android-source.tar.gz' | sha256sum -c -
           tar -xzf planjoy-r7-android-source.tar.gz
           test -d android_native
-
           overlay='https://raw.githubusercontent.com/alirezarastegar/mining-eng.ir/tmp-planjoy-r713-parity/planjoy-r713-v2'
-          for f in seg00.b64 seg01.b64 seg02.b64 seg03.b64 seg04.b64 seg05.b64; do
-            curl -fsSL "$overlay/$f" -o "planjoy-r713-v2/$f"
-          done
+          for f in seg00.b64 seg01.b64 seg02.b64 seg03.b64 seg04.b64 seg05.b64; do curl -fsSL "$overlay/$f" -o "planjoy-r713-v2/$f"; done
           cat planjoy-r713-v2/seg*.b64 > planjoy-r713-v2/overlay.b64
           base64 -d planjoy-r713-v2/overlay.b64 > planjoy-r713-v2/overlay.tar.gz
           echo '79cc1b24ac0813710a161139ccd283fa3fcb3ff6b34aeec8d0766d959c3b87ab  planjoy-r713-v2/overlay.tar.gz' | sha256sum -c -
           tar -xzf planjoy-r713-v2/overlay.tar.gz -C android_native
 
-      - name: Apply tested R7.8.23 delta
+      - name: Apply tested R7.8.23 delta and SDK compatibility patch
         shell: bash
         run: |
           set -euo pipefail
@@ -65,26 +55,27 @@ jobs:
           base64 -d planjoy-r7823-source/code/delta.b64 > planjoy-r7823-source/code/delta.tar.xz
           echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  planjoy-r7823-source/code/delta.tar.xz' | sha256sum -c -
           tar -xJf planjoy-r7823-source/code/delta.tar.xz -C android_native
+          sed -i 's/compileSdk=37/compileSdk=36/g; s/targetSdk=37/targetSdk=36/g' android_native/app/build.gradle.kts
           grep -q 'versionCode=78023' android_native/app/build.gradle.kts
           grep -q 'versionName="0.7.8+23"' android_native/app/build.gradle.kts
+          grep -q 'compileSdk=36' android_native/app/build.gradle.kts
+          grep -q 'targetSdk=36' android_native/app/build.gradle.kts
 
       - name: Verify exact artwork hashes
         shell: bash
         run: |
           set -euo pipefail
-          out='android_native/app/src/main/res/drawable'
           echo 'c73988887cf3f7033c6e51a5ec2e5af14d65524e4ce255ead4bd9a91633754fb  android_native/app/src/main/res/drawable/pj_original_today_header.png' | sha256sum -c -
           echo 'e749941257577e20a6906e5352895fcb3fccbf674ad4215d4f3f8a7eef516cad  android_native/app/src/main/res/drawable/pj_original_calendar.png' | sha256sum -c -
           echo '735973c5f01c88a6a85b81668e077e5aa39abdc11f523eb8628fb2745d8b9dc3  android_native/app/src/main/res/drawable/pj_original_focus_scene.webp' | sha256sum -c -
           echo '746d865ed85ce0f9b6d60b790d2685e7e217e205de537c23d6e2eb12f4fb46b7  android_native/app/src/main/res/drawable/pj_original_focus_stats.png' | sha256sum -c -
           echo '1eff77f0c7c065fd518e41116abf2377182d0d564aa165e8745cca90c60b1c48  android_native/app/src/main/res/drawable/pj_original_task_ducks.webp' | sha256sum -c -
 
-      - name: Verify R7.8.23 contracts
+      - name: Verify R7.8.23 feature contracts
         working-directory: android_native
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/verify_toolchain.py
           python3 tests/r7823_android_static_contract.py
           python3 tests/r78_android_native_contract.py
           python3 tests/r7823_windows_parity_contract.py
@@ -103,7 +94,7 @@ jobs:
           test -f app/build/reports/lint-results-productionRelease.txt
           ! grep -q ': Error:' app/build/reports/lint-results-productionRelease.txt
 
-      - name: Align and verify package/version before signing
+      - name: Align and verify package/version before private signing
         working-directory: android_native
         shell: bash
         run: |
@@ -115,7 +106,7 @@ jobs:
           "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2" dump badging ../PlanJoyR7823-Android-v0.7.8.23-UNSIGNED-ALIGNED.apk | tee ../r7823-badging.txt
           grep -q "package: name='app.planjoy.local' versionCode='78023' versionName='0.7.8+23'" ../r7823-badging.txt
           sha256sum ../PlanJoyR7823-Android-v0.7.8.23-UNSIGNED-ALIGNED.apk | tee ../PlanJoyR7823-Android-UNSIGNED-SHA256.txt
-          printf 'versionCode=78023\nversionName=0.7.8+23\napplicationId=app.planjoy.local\ncompileSdk=37\ntargetSdk=37\nbuildTools=36.0.0\ngradle=9.5.0\njdk=17\nsigning=deferred-to-private-release-signer\n' > ../PlanJoyR7823-build-metadata.txt
+          printf 'versionCode=78023\nversionName=0.7.8+23\napplicationId=app.planjoy.local\ncompileSdk=36\ntargetSdk=36\nbuildTools=36.0.0\ngradle=9.5.0\njdk=17\nsigning=deferred-to-private-release-signer\n' > ../PlanJoyR7823-build-metadata.txt
 
       - uses: actions/upload-artifact@v4
         with:

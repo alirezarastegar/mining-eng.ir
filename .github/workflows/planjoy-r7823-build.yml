@@ -1,4 +1,4 @@
-name: PlanJoy R7.8.23 Signed Android Build
+name: PlanJoy R7.8.23 Android Full-Parity Build
 
 on:
   workflow_dispatch:
@@ -6,13 +6,12 @@ on:
     branches: [tmp-planjoy-r7823-build]
     paths:
       - '.github/workflows/planjoy-r7823-build.yml'
+      - 'planjoy-r7823-source/**'
 
 jobs:
   android-release:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
-      EXPECTED_SIGNER_SHA256: fd23be91dd847ae2046b1fb926001958fe5721ca1aa082e9ab8994e0eff68509
     steps:
       - uses: actions/checkout@v4
 
@@ -69,45 +68,16 @@ jobs:
           grep -q 'versionCode=78023' android_native/app/build.gradle.kts
           grep -q 'versionName="0.7.8+23"' android_native/app/build.gradle.kts
 
-      - name: Restore exact original artwork by hash
+      - name: Verify exact artwork hashes
         shell: bash
         run: |
           set -euo pipefail
-          res='android_native/app/src/main/res'
-          out="$res/drawable"
-          mkdir -p "$out"
-          restore_asset() {
-            local target="$1" expected="$2"; shift 2
-            local dest="$out/$target" found=''
-            if [ -f "$dest" ] && [ "$(sha256sum "$dest" | awk '{print $1}')" = "$expected" ]; then
-              echo "asset already exact: $target"
-              return 0
-            fi
-            for candidate in "$@"; do
-              found=$(find "$res" -type f -name "$candidate" -print -quit || true)
-              if [ -n "$found" ] && [ "$(sha256sum "$found" | awk '{print $1}')" = "$expected" ]; then
-                cp "$found" "$dest"
-                break
-              fi
-              found=''
-            done
-            if [ -z "$found" ]; then
-              while IFS= read -r f; do
-                if [ "$(sha256sum "$f" | awk '{print $1}')" = "$expected" ]; then
-                  found="$f"
-                  cp "$f" "$dest"
-                  break
-                fi
-              done < <(find "$res" -type f \( -name '*.png' -o -name '*.webp' -o -name '*.jpg' -o -name '*.jpeg' \))
-            fi
-            test -f "$dest" || { echo "missing exact artwork: $target" >&2; exit 31; }
-            echo "$expected  $dest" | sha256sum -c -
-          }
-          restore_asset pj_original_today_header.png c73988887cf3f7033c6e51a5ec2e5af14d65524e4ce255ead4bd9a91633754fb planed_top_background.png pj_original_today_header.png
-          restore_asset pj_original_calendar.png e749941257577e20a6906e5352895fcb3fccbf674ad4215d4f3f8a7eef516cad ic_patch_calendar.png pj_original_calendar.png
-          restore_asset pj_original_focus_scene.webp 735973c5f01c88a6a85b81668e077e5aa39abdc11f523eb8628fb2745d8b9dc3 ic_focus_duck.webp pj_original_focus_scene.webp
-          restore_asset pj_original_focus_stats.png 746d865ed85ce0f9b6d60b790d2685e7e217e205de537c23d6e2eb12f4fb46b7 duck_analysis_plan_bottom.png pj_original_focus_stats.png
-          restore_asset pj_original_task_ducks.webp 1eff77f0c7c065fd518e41116abf2377182d0d564aa165e8745cca90c60b1c48 ic_task_center_ducks.webp pj_original_task_ducks.webp
+          out='android_native/app/src/main/res/drawable'
+          echo 'c73988887cf3f7033c6e51a5ec2e5af14d65524e4ce255ead4bd9a91633754fb  android_native/app/src/main/res/drawable/pj_original_today_header.png' | sha256sum -c -
+          echo 'e749941257577e20a6906e5352895fcb3fccbf674ad4215d4f3f8a7eef516cad  android_native/app/src/main/res/drawable/pj_original_calendar.png' | sha256sum -c -
+          echo '735973c5f01c88a6a85b81668e077e5aa39abdc11f523eb8628fb2745d8b9dc3  android_native/app/src/main/res/drawable/pj_original_focus_scene.webp' | sha256sum -c -
+          echo '746d865ed85ce0f9b6d60b790d2685e7e217e205de537c23d6e2eb12f4fb46b7  android_native/app/src/main/res/drawable/pj_original_focus_stats.png' | sha256sum -c -
+          echo '1eff77f0c7c065fd518e41116abf2377182d0d564aa165e8745cca90c60b1c48  android_native/app/src/main/res/drawable/pj_original_task_ducks.webp' | sha256sum -c -
 
       - name: Verify R7.8.23 contracts
         working-directory: android_native
@@ -117,62 +87,46 @@ jobs:
           python3 tools/verify_toolchain.py
           python3 tests/r7823_android_static_contract.py
           python3 tests/r78_android_native_contract.py
-          if [ -f tests/r7823_windows_parity_contract.py ]; then python3 tests/r7823_windows_parity_contract.py; fi
+          python3 tests/r7823_windows_parity_contract.py
 
-      - name: Restore persistent R7.7+ release signer
-        shell: bash
-        run: |
-          set -euo pipefail
-          : '${{ secrets.PLANJOY_R77_P12_B64:?missing PLANJOY_R77_P12_B64 }}'
-          : '${{ secrets.PLANJOY_R77_P12_PASSWORD:?missing PLANJOY_R77_P12_PASSWORD }}'
-          : '${{ secrets.PLANJOY_R77_KEY_ALIAS:?missing PLANJOY_R77_KEY_ALIAS }}'
-          : '${{ secrets.PLANJOY_R77_KEY_PASSWORD:?missing PLANJOY_R77_KEY_PASSWORD }}'
-          printf '%s' '${{ secrets.PLANJOY_R77_P12_B64 }}' | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/planjoy-r77-release.p12"
-          chmod 600 "$RUNNER_TEMP/planjoy-r77-release.p12"
-          echo "PLANJOY_ANDROID_KEYSTORE=$RUNNER_TEMP/planjoy-r77-release.p12" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_STORE_PASSWORD=${{ secrets.PLANJOY_R77_P12_PASSWORD }}" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_KEY_ALIAS=${{ secrets.PLANJOY_R77_KEY_ALIAS }}" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_KEY_PASSWORD=${{ secrets.PLANJOY_R77_KEY_PASSWORD }}" >> "$GITHUB_ENV"
-
-      - name: Build production release and lint
+      - name: Build unsigned production release and lint
         working-directory: android_native
         shell: bash
+        env:
+          PLANJOY_ANDROID_KEYSTORE: ''
+          PLANJOY_ANDROID_STORE_PASSWORD: ''
+          PLANJOY_ANDROID_KEY_ALIAS: ''
+          PLANJOY_ANDROID_KEY_PASSWORD: ''
         run: |
           set -euo pipefail
-          gradle clean :app:compileProductionReleaseKotlin :app:assembleProductionRelease :app:lintProductionRelease --no-daemon --no-build-cache --stacktrace
+          gradle clean :app:assembleProductionRelease :app:lintProductionRelease --no-daemon --no-build-cache --stacktrace
           test -f app/build/reports/lint-results-productionRelease.txt
           ! grep -q ': Error:' app/build/reports/lint-results-productionRelease.txt
 
-      - name: Verify release package, signer, alignment and version
+      - name: Align and verify package/version before signing
         working-directory: android_native
         shell: bash
         run: |
           set -euo pipefail
           APK=$(find app/build/outputs/apk/production/release -name '*.apk' -type f | head -1)
           test -n "$APK" && test -f "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK" | tee r7823-apksigner.txt
-          FP=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' r7823-apksigner.txt | head -1 | tr -d ':\r\n ' | tr 'A-F' 'a-f')
-          test "$FP" = "$EXPECTED_SIGNER_SHA256" || { echo "Unexpected signer: $FP" >&2; exit 41; }
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2" dump badging "$APK" | tee r7823-badging.txt
-          grep -q "versionCode='78023'" r7823-badging.txt
-          grep -q "versionName='0.7.8+23'" r7823-badging.txt
-          cp "$APK" ../PlanJoyR7823-Android-v0.7.8.23.apk
-          sha256sum ../PlanJoyR7823-Android-v0.7.8.23.apk | tee ../PlanJoyR7823-Android-SHA256.txt
-          printf 'versionCode=78023\nversionName=0.7.8+23\nsigner_sha256=%s\ncompileSdk=37\ntargetSdk=37\nbuildTools=36.0.0\ngradle=9.5.0\njdk=17\n' "$FP" > ../PlanJoyR7823-build-metadata.txt
-          cp r7823-apksigner.txt ../r7823-apksigner.txt
-          cp r7823-badging.txt ../r7823-badging.txt
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -f -P 16 -v 4 "$APK" ../PlanJoyR7823-Android-v0.7.8.23-UNSIGNED-ALIGNED.apk
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 ../PlanJoyR7823-Android-v0.7.8.23-UNSIGNED-ALIGNED.apk
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2" dump badging ../PlanJoyR7823-Android-v0.7.8.23-UNSIGNED-ALIGNED.apk | tee ../r7823-badging.txt
+          grep -q "package: name='app.planjoy.local' versionCode='78023' versionName='0.7.8+23'" ../r7823-badging.txt
+          sha256sum ../PlanJoyR7823-Android-v0.7.8.23-UNSIGNED-ALIGNED.apk | tee ../PlanJoyR7823-Android-UNSIGNED-SHA256.txt
+          printf 'versionCode=78023\nversionName=0.7.8+23\napplicationId=app.planjoy.local\ncompileSdk=37\ntargetSdk=37\nbuildTools=36.0.0\ngradle=9.5.0\njdk=17\nsigning=deferred-to-private-release-signer\n' > ../PlanJoyR7823-build-metadata.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PlanJoy-R7823-Android-signed
+          name: PlanJoy-R7823-Android-unsigned-aligned
           retention-days: 7
           if-no-files-found: error
+          compression-level: 0
           path: |
-            PlanJoyR7823-Android-v0.7.8.23.apk
-            PlanJoyR7823-Android-SHA256.txt
+            PlanJoyR7823-Android-v0.7.8.23-UNSIGNED-ALIGNED.apk
+            PlanJoyR7823-Android-UNSIGNED-SHA256.txt
             PlanJoyR7823-build-metadata.txt
-            r7823-apksigner.txt
             r7823-badging.txt
             android_native/app/build/reports/lint-results-productionRelease.html
             android_native/app/build/reports/lint-results-productionRelease.txt

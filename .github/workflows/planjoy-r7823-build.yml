@@ -34,7 +34,11 @@ jobs:
           set -euo pipefail
           git fetch --depth=1 origin tmp-planjoy-r713-parity
           git checkout FETCH_HEAD -- planjoy-r713-v2
-          cat planjoy-r713-v2/seg*.b64 > planjoy-r713-v2/overlay.b64
+          : > planjoy-r713-v2/overlay.b64
+          for f in seg00.b64 seg01.b64 seg02.b64 seg03.b64 seg04.b64 seg05.b64; do
+            test -s "planjoy-r713-v2/$f"
+            tr -d '\r\n\t ' < "planjoy-r713-v2/$f" >> planjoy-r713-v2/overlay.b64
+          done
           base64 -d planjoy-r713-v2/overlay.b64 > planjoy-r713-v2/overlay.tar.gz
           echo '79cc1b24ac0813710a161139ccd283fa3fcb3ff6b34aeec8d0766d959c3b87ab  planjoy-r713-v2/overlay.tar.gz' | sha256sum -c -
           mkdir -p android_native
@@ -54,6 +58,10 @@ jobs:
           sed -i 's/compileSdk=37/compileSdk=36/g; s/targetSdk=37/targetSdk=36/g' android_native/app/build.gradle.kts
           grep -q 'versionCode=78023' android_native/app/build.gradle.kts
           grep -q 'versionName="0.7.8+23"' android_native/app/build.gradle.kts
+          if [ ! -f android_native/app/src/main/res/font/iransans_xv.ttf ]; then
+            mkdir -p android_native/app/src/main/res/font
+            cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf android_native/app/src/main/res/font/iransans_xv.ttf
+          fi
 
       - name: Verify exact artwork hashes
         shell: bash

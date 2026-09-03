@@ -34,15 +34,37 @@ jobs:
           set -euo pipefail
           git fetch --depth=1 origin tmp-planjoy-r713-parity
           git checkout FETCH_HEAD -- planjoy-r713-v2
-          cat planjoy-r713-v2/seg00.b64 planjoy-r713-v2/seg01.b64 planjoy-r713-v2/seg02.b64 planjoy-r713-v2/seg03.b64 planjoy-r713-v2/seg04.b64 planjoy-r713-v2/seg05.b64 | tr -d '\r\n\t ' > planjoy-r713-v2/overlay.b64
-          case $(( $(wc -c < planjoy-r713-v2/overlay.b64) % 4 )) in
-            0) ;;
-            2) printf '==' >> planjoy-r713-v2/overlay.b64 ;;
-            3) printf '=' >> planjoy-r713-v2/overlay.b64 ;;
-            *) echo 'Invalid legacy Base64 length: impossible remainder 1' >&2; exit 23 ;;
-          esac
-          base64 -d planjoy-r713-v2/overlay.b64 > planjoy-r713-v2/overlay.tar.gz
-          echo '79cc1b24ac0813710a161139ccd283fa3fcb3ff6b34aeec8d0766d959c3b87ab  planjoy-r713-v2/overlay.tar.gz' | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, re, sys
+          root = Path('planjoy-r713-v2')
+          parts = [root / f'seg{i:02d}.b64' for i in range(6)]
+          raw = b''.join(p.read_bytes() for p in parts)
+          raw = re.sub(rb'\s+', b'', raw)
+          invalid = sorted(set(raw) - set(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-'))
+          if invalid:
+              print('Unsupported legacy Base64 bytes:', invalid, file=sys.stderr)
+              sys.exit(23)
+          raw = raw.replace(b'-', b'+').replace(b'_', b'/')
+          rem = len(raw) % 4
+          if rem == 1:
+              print('Invalid legacy Base64 length: remainder 1', file=sys.stderr)
+              sys.exit(23)
+          raw += b'=' * ((4-rem) % 4)
+          try:
+              payload = base64.b64decode(raw, validate=True)
+          except Exception as exc:
+              print(f'Legacy Base64 validation failed: {exc}', file=sys.stderr)
+              sys.exit(23)
+          out = root / 'overlay.tar.gz'
+          out.write_bytes(payload)
+          got = hashlib.sha256(payload).hexdigest()
+          expected = '79cc1b24ac0813710a161139ccd283fa3fcb3ff6b34aeec8d0766d959c3b87ab'
+          print('Legacy overlay bytes:', len(payload), 'sha256:', got)
+          if got != expected:
+              print('Legacy overlay SHA mismatch', file=sys.stderr)
+              sys.exit(24)
+          PY
           mkdir -p android_native
           tar -xzf planjoy-r713-v2/overlay.tar.gz -C android_native
           test -f android_native/app/build.gradle.kts

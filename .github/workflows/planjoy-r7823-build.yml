@@ -6,7 +6,7 @@ on:
     branches: [tmp-planjoy-r7823-build]
     paths:
       - '.github/workflows/planjoy-r7823-build.yml'
-      - 'planjoy-r7823-source/**'
+      - 'planjoy-r7823-source/code/**'
 
 jobs:
   android-release:
@@ -28,27 +28,33 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Reconstruct verified complete R7.8.23 source
+      - name: Reconstruct verified R7.8.23 source tree
         shell: bash
         run: |
           set -euo pipefail
-          cat planjoy-r7823-source/full/chunk*.b64 > planjoy-r7823-source/full/source.b64
-          base64 -d planjoy-r7823-source/full/source.b64 > planjoy-r7823-source/full/source.tar.xz
-          echo '16dd86b9e48df475c2b47b462a2b80c4de779acbf343e78a073054bafbbacf19  planjoy-r7823-source/full/source.tar.xz' | sha256sum -c -
-          rm -rf "$RUNNER_TEMP/r7823-full"
-          mkdir -p "$RUNNER_TEMP/r7823-full"
-          tar -xJf planjoy-r7823-source/full/source.tar.xz -C "$RUNNER_TEMP/r7823-full"
-          ROOT=$(find "$RUNNER_TEMP/r7823-full" -type f -path '*/app/build.gradle.kts' -printf '%h\n' | sed 's#/app$##' | head -1)
-          test -n "$ROOT" && test -f "$ROOT/settings.gradle.kts"
+          cat planjoy-r7823-source/code/chunk*.b64 > /tmp/r7823-source.b64
+          base64 -d /tmp/r7823-source.b64 > /tmp/r7823-source.tar.xz
+          echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/r7823-source.tar.xz' | sha256sum -c -
+          xz -t /tmp/r7823-source.tar.xz
           rm -rf android_native
           mkdir -p android_native
-          cp -a "$ROOT"/. android_native/
-          sed -i 's/compileSdk=37/compileSdk=36/g; s/targetSdk=37/targetSdk=36/g' android_native/app/build.gradle.kts
-          grep -q 'versionCode=78023' android_native/app/build.gradle.kts
-          grep -q 'versionName="0.7.8+23"' android_native/app/build.gradle.kts
-          test -s android_native/app/src/main/res/font/iransans_xv.ttf || { echo 'Required IranSans project asset is missing; refusing font substitution.' >&2; exit 22; }
+          tar -xJf /tmp/r7823-source.tar.xz -C android_native
+          test -f android_native/app/build.gradle.kts
+          test -f android_native/settings.gradle.kts
+          test -f android_native/tests/r7823_windows_parity_contract.py
+          sed -i 's/compileSdk[[:space:]]*=[[:space:]]*37/compileSdk = 36/g; s/targetSdk[[:space:]]*=[[:space:]]*37/targetSdk = 36/g' android_native/app/build.gradle.kts
+          grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78023' android_native/app/build.gradle.kts
+          grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+23"' android_native/app/build.gradle.kts
 
-      - name: Verify exact synchronized artwork
+      - name: Verify R7.8.23 Windows parity contracts
+        working-directory: android_native
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/r7823_windows_parity_contract.py
+          python3 tests/r78_android_native_contract.py
+
+      - name: Verify synchronized artwork and font resource
         shell: bash
         run: |
           set -euo pipefail
@@ -57,14 +63,7 @@ jobs:
           echo '735973c5f01c88a6a85b81668e077e5aa39abdc11f523eb8628fb2745d8b9dc3  android_native/app/src/main/res/drawable/pj_original_focus_scene.webp' | sha256sum -c -
           echo '746d865ed85ce0f9b6d60b790d2685e7e217e205de537c23d6e2eb12f4fb46b7  android_native/app/src/main/res/drawable/pj_original_focus_stats.png' | sha256sum -c -
           echo '1eff77f0c7c065fd518e41116abf2377182d0d564aa165e8745cca90c60b1c48  android_native/app/src/main/res/drawable/pj_original_task_ducks.webp' | sha256sum -c -
-
-      - name: Verify R7.8.23 parity contracts
-        working-directory: android_native
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tests/r78_android_native_contract.py
-          python3 tests/r7823_windows_parity_contract.py
+          test -s android_native/app/src/main/res/font/iransans_xv.ttf || { echo 'Authorized IranSans project asset is absent; refusing fallback substitution.' >&2; exit 22; }
 
       - name: Restore persistent R7.7+ release signer
         shell: bash
@@ -86,7 +85,7 @@ jobs:
           test -f app/build/reports/lint-results-productionRelease.txt
           ! grep -q ': Error:' app/build/reports/lint-results-productionRelease.txt
 
-      - name: Verify signer, package, version and alignment
+      - name: Verify signer package version and alignment
         working-directory: android_native
         shell: bash
         run: |
@@ -112,9 +111,9 @@ jobs:
           find "$RUNNER_TEMP/PlanJoyR7823-Android-Source" -type f \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.p12' -o -iname '*.jks' -o -iname '*.keystore' \) -delete
           cat > "$RUNNER_TEMP/PlanJoyR7823-Android-Source/FONT-ASSET-NOT-INCLUDED.md" <<'EOF'
           # Font asset
-          The binary font asset is intentionally not included in this source distribution.
-          The production build expects the authorized project font resource at app/src/main/res/font/iransans_xv.ttf.
-          No fallback font is substituted by the release workflow.
+          The binary font asset is intentionally omitted from this source distribution.
+          Production expects the authorized project font resource at app/src/main/res/font/iransans_xv.ttf.
+          The release workflow never substitutes another font.
           EOF
           (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/PlanJoyR7823-Android-Source-v0.7.8.23.zip" PlanJoyR7823-Android-Source)
           sha256sum PlanJoyR7823-Android-Source-v0.7.8.23.zip | tee PlanJoyR7823-Android-Source-SHA256.txt

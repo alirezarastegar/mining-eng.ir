@@ -31,7 +31,7 @@ jobs:
           mkdir extracted
           unzip -q /tmp/offline-artifact.zip -d extracted
           test -f extracted/PlanJoyR7828-offline-build-env.tar.xz
-          sha256sum -c extracted/PlanJoyR7828-offline-build-env.sha256
+          (cd extracted && sha256sum -c PlanJoyR7828-offline-build-env.sha256)
       - name: Split bundle into transferable chunks
         shell: bash
         run: |

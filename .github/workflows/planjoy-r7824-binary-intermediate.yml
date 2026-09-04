@@ -9,6 +9,7 @@ on:
       - 'planjoy-r7824-source/final-patch/**'
       - 'planjoy-r7824-source/final-icon/**'
       - 'planjoy-r7824-source/hotfix/**'
+      - 'planjoy-r7824-source/final-compile-fix.py'
 
 jobs:
   build:
@@ -56,6 +57,7 @@ jobs:
           xz -t /tmp/user2.patch.xz
           xz -dc /tmp/user2.patch.xz > /tmp/user2.patch
           patch --batch --forward -p1 -d android_native < /tmp/user2.patch
+          python3 planjoy-r7824-source/final-compile-fix.py
 
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78024' android_native/app/build.gradle.kts
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+24"' android_native/app/build.gradle.kts

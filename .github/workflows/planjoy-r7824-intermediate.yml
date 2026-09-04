@@ -58,7 +58,7 @@ jobs:
           xz -t /tmp/user2.patch.xz
           xz -dc /tmp/user2.patch.xz > /tmp/user2.patch
           patch --batch --forward -p1 -d android_native < /tmp/user2.patch
-          cat planjoy-r7824-source/user2/icon/part*.b64 | base64 -d > android_native/app/src/main/res/drawable/planjoy_launcher.png
+          cat planjoy-r7824-source/user2/icon2/part*.b64 | base64 -d > android_native/app/src/main/res/drawable/planjoy_launcher.png
           echo '27cf729e3dd434684f2592994ef93c8c7adb73b31c3f92a58fcf79d4643364c9  android_native/app/src/main/res/drawable/planjoy_launcher.png' | sha256sum -c -
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78024' android_native/app/build.gradle.kts
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+24"' android_native/app/build.gradle.kts

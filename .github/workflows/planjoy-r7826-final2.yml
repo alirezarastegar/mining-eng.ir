@@ -55,7 +55,7 @@ jobs:
           patch --batch --forward -p1 -d android_native < /tmp/r7825.patch
           python3 planjoy-r7825-source/compile-fix.py
 
-      - name: Apply R7.8.26 app patch with strict single historical-test exception
+      - name: Apply R7.8.26 app patch and migrate historical parity contract
         shell: bash
         run: |
           set -euo pipefail
@@ -77,10 +77,23 @@ jobs:
           from pathlib import Path
           p=Path('android_native/tests/r7823_windows_parity_contract.py')
           s=p.read_text(encoding='utf-8')
-          s=(s.replace('78025','78026')
+          s=(s.replace('78023','78026')
+              .replace('78024','78026')
+              .replace('78025','78026')
+              .replace('0.7.8+23','0.7.8+26')
+              .replace('0.7.8+24','0.7.8+26')
               .replace('0.7.8+25','0.7.8+26')
+              .replace('R7.8.23-WINDOWS-PARITY-INSTALL-SAFE','R7.8.26-WIDGET-CALENDAR-CATEGORY-SYNC-PARITY')
+              .replace('R7.8.24-MOBILE-UI-RESTORE-REWARD-PARITY','R7.8.26-WIDGET-CALENDAR-CATEGORY-SYNC-PARITY')
               .replace('R7.8.25-SETTINGS-NAV-LANGUAGE-POLISH','R7.8.26-WIDGET-CALENDAR-CATEGORY-SYNC-PARITY'))
-          p.write_text(s,encoding='utf-8')
+          lines=[]
+          for line in s.splitlines():
+              if "ok('stats hidden from rail'" in line:
+                  line="ok('stats hidden from bottom tabs', 'listOf(S.TODAY,S.WIDGETS,S.FOCUS,S.SETTINGS)' in app)"
+              if "ok('focus opens stats'" in line:
+                  line="ok('focus opens stats', 'R78FocusScreen(a,fa,cal){go(S.STATS)}' in app and 'onOpenStats' in focus)"
+              lines.append(line)
+          p.write_text('\n'.join(lines)+'\n',encoding='utf-8')
           PY
           test -z "$(find android_native -type f -name '*.rej' -print -quit)"
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78026' android_native/app/build.gradle.kts

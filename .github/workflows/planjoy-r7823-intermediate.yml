@@ -18,8 +18,13 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - name: Install Android SDK 37 / Build Tools 36.0.0
-        run: sdkmanager 'platform-tools' 'platforms;android-37' 'build-tools;36.0.0'
+      - name: Install Android SDK 37.0 / Build Tools 37.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --channel=3 'platform-tools' 'platforms;android-37.0' 'build-tools;37.0.0'
+          test -f "$ANDROID_SDK_ROOT/platforms/android-37.0/android.jar"
+          test -x "$ANDROID_SDK_ROOT/build-tools/37.0.0/aapt2"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -37,6 +42,15 @@ jobs:
           grep -Eq 'compileSdk[[:space:]]*=[[:space:]]*37' android_native/app/build.gradle.kts
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78023' android_native/app/build.gradle.kts
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+23"' android_native/app/build.gradle.kts
+
+      - name: Bind SDK 37.0 to numeric compileSdk 37
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -e "$ANDROID_SDK_ROOT/platforms/android-37" ]; then
+            ln -s "$ANDROID_SDK_ROOT/platforms/android-37.0" "$ANDROID_SDK_ROOT/platforms/android-37"
+          fi
+          test -f "$ANDROID_SDK_ROOT/platforms/android-37/android.jar"
 
       - name: Add non-deliverable valid font placeholder and verify R7.8.23 parity
         working-directory: android_native
@@ -60,21 +74,21 @@ jobs:
           ! grep -q ': Error:' app/build/reports/lint-results-productionRelease.txt
           APK=$(find app/build/outputs/apk/production/release -name '*.apk' -type f | head -1)
           test -n "$APK" && test -f "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -f -P 16 -v 4 "$APK" ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2" dump badging ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk | tee ../r7823-intermediate-badging.txt
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -f -P 16 -v 4 "$APK" ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -c -P 16 -v 4 ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/aapt2" dump badging ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk | tee ../r7823-intermediate-badging.txt
           grep -q "package: name='app.planjoy.local' versionCode='78023' versionName='0.7.8+23'" ../r7823-intermediate-badging.txt
 
       - name: Package official signing verification tools
         shell: bash
         run: |
           set -euo pipefail
-          BT="$ANDROID_SDK_ROOT/build-tools/36.0.0"
+          BT="$ANDROID_SDK_ROOT/build-tools/37.0.0"
           mkdir -p toolpack/lib
           cp "$BT/apksigner" "$BT/zipalign" "$BT/aapt2" toolpack/
           cp "$BT/lib/apksigner.jar" toolpack/lib/
           chmod +x toolpack/apksigner toolpack/zipalign toolpack/aapt2
-          tar -czf PlanJoy-Android-BuildTools36-Linux.tar.gz -C toolpack .
+          tar -czf PlanJoy-Android-BuildTools37-Linux.tar.gz -C toolpack .
 
       - name: Package clean source without font binary
         shell: bash
@@ -100,7 +114,7 @@ jobs:
           compression-level: 0
           path: |
             PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
-            PlanJoy-Android-BuildTools36-Linux.tar.gz
+            PlanJoy-Android-BuildTools37-Linux.tar.gz
             PlanJoyR7823-Android-Source-v0.7.8.23.zip
             PlanJoyR7823-Android-Source-SHA256.txt
             r7823-parity.txt

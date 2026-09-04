@@ -69,7 +69,7 @@ jobs:
           for name in ['r7821_android_static_contract.py','r7823_windows_parity_contract.py']:
               p=root/name
               s=p.read_text()
-              s=s.replace('78024','78025').replace('0.7.8+24','0.7.8+25').replace('R7.8.24-MOBILE-UI-RESTORE-REWARD-PARITY','R7.8.25-SETTINGS-NAV-LANGUAGE-POLISH')
+              s=s.replace('78023','78025').replace('78024','78025').replace('0.7.8+23','0.7.8+25').replace('0.7.8+24','0.7.8+25').replace('R7.8.24-MOBILE-UI-RESTORE-REWARD-PARITY','R7.8.25-SETTINGS-NAV-LANGUAGE-POLISH')
               if name.startswith('r7821'):
                   lines=[]
                   for line in s.splitlines():

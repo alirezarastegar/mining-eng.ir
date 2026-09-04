@@ -18,8 +18,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - name: Install Android SDK 36 / Build Tools 36.0.0
-        run: sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Install Android SDK 37 / Build Tools 36.0.0
+        run: sdkmanager 'platform-tools' 'platforms;android-37' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -34,17 +34,19 @@ jobs:
           xz -t /tmp/source.tar.xz
           rm -rf android_native && mkdir android_native
           tar -xJf /tmp/source.tar.xz -C android_native
-          sed -i 's/compileSdk[[:space:]]*=[[:space:]]*37/compileSdk = 36/g; s/targetSdk[[:space:]]*=[[:space:]]*37/targetSdk = 36/g' android_native/app/build.gradle.kts
+          grep -Eq 'compileSdk[[:space:]]*=[[:space:]]*37' android_native/app/build.gradle.kts
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78023' android_native/app/build.gradle.kts
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+23"' android_native/app/build.gradle.kts
 
-      - name: Add non-deliverable font placeholder and verify R7.8.23 parity
+      - name: Add non-deliverable valid font placeholder and verify R7.8.23 parity
         working-directory: android_native
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p app/src/main/res/font
-          printf 'PLANJOY_INTERMEDIATE_ONLY' > app/src/main/res/font/iransans_xv.ttf
+          SYSFONT=$(find /usr/share/fonts -type f \( -iname '*.ttf' -o -iname '*.otf' \) | head -1)
+          test -n "$SYSFONT" && test -s "$SYSFONT"
+          cp "$SYSFONT" app/src/main/res/font/iransans_xv.ttf
           python3 tests/r7823_windows_parity_contract.py | tee ../r7823-parity.txt
           grep -q 'SUMMARY 15/15 PASS' ../r7823-parity.txt
 

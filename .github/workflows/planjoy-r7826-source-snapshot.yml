@@ -1,0 +1,74 @@
+name: PlanJoy R7.8.26 Source Snapshot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tmp-planjoy-r7823-build]
+    paths:
+      - '.github/workflows/planjoy-r7826-source-snapshot.yml'
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct current R7.8.26 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat planjoy-r7823-source/code/chunk*.b64 | base64 -d > /tmp/source.tar.xz
+          echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/source.tar.xz' | sha256sum -c -
+          rm -rf android_native && mkdir android_native
+          tar -xJf /tmp/source.tar.xz -C android_native
+          python3 planjoy-r7823-source/r7823_compile_patch.py
+          cat planjoy-r7824-source/patch-xz/part*.b64 | base64 -d > /tmp/r7824.patch.xz
+          xz -dc /tmp/r7824.patch.xz > /tmp/r7824.patch
+          patch --batch --forward -p1 -d android_native < /tmp/r7824.patch
+          python3 planjoy-r7824-source/hotfix/compile-fix.py
+          cat planjoy-r7824-source/final-patch/part*.b64 | base64 -d > /tmp/user2.patch.xz
+          xz -dc /tmp/user2.patch.xz > /tmp/user2.patch
+          patch --batch --forward -p1 -d android_native < /tmp/user2.patch
+          python3 planjoy-r7824-source/final-compile-fix.py
+          cat planjoy-r7825-source/patch2/part*.b64 | base64 -d > /tmp/r7825.patch.xz
+          xz -dc /tmp/r7825.patch.xz > /tmp/r7825.patch
+          patch --batch --forward -p1 -d android_native < /tmp/r7825.patch
+          python3 planjoy-r7825-source/compile-fix.py
+          cat planjoy-r7826-source/patch/part*.b64 | base64 -d > /tmp/r7826.patch.xz
+          xz -dc /tmp/r7826.patch.xz > /tmp/r7826.patch
+          set +e
+          patch --batch --forward -p1 -d android_native < /tmp/r7826.patch
+          RC=$?
+          set -e
+          test "$RC" -eq 1
+          test -f android_native/tests/r7823_windows_parity_contract.py.rej
+          rm -f android_native/tests/r7823_windows_parity_contract.py.rej
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('android_native/tests/r7823_windows_parity_contract.py')
+          s=p.read_text(encoding='utf-8')
+          s=(s.replace('78023','78026').replace('78024','78026').replace('78025','78026')
+              .replace('0.7.8+23','0.7.8+26').replace('0.7.8+24','0.7.8+26').replace('0.7.8+25','0.7.8+26')
+              .replace('R7.8.23-WINDOWS-PARITY-INSTALL-SAFE','R7.8.26-WIDGET-CALENDAR-CATEGORY-SYNC-PARITY')
+              .replace('R7.8.24-MOBILE-UI-RESTORE-REWARD-PARITY','R7.8.26-WIDGET-CALENDAR-CATEGORY-SYNC-PARITY')
+              .replace('R7.8.25-SETTINGS-NAV-LANGUAGE-POLISH','R7.8.26-WIDGET-CALENDAR-CATEGORY-SYNC-PARITY'))
+          lines=[]
+          for line in s.splitlines():
+              if "ok('stats hidden from rail'" in line:
+                  line="ok('stats hidden from bottom tabs', 'listOf(S.TODAY,S.WIDGETS,S.FOCUS,S.SETTINGS)' in app)"
+              if "ok('focus opens stats'" in line:
+                  line="ok('focus opens stats', 'R78FocusScreen(a,fa,cal){go(S.STATS)}' in app and 'onOpenStats' in focus)"
+              lines.append(line)
+          p.write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          PY
+          tar -czf PlanJoy-R7826-Reconstructed-Source.tar.gz android_native
+          sha256sum PlanJoy-R7826-Reconstructed-Source.tar.gz > PlanJoy-R7826-Reconstructed-Source.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoy-R7826-Reconstructed-Source
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            PlanJoy-R7826-Reconstructed-Source.tar.gz
+            PlanJoy-R7826-Reconstructed-Source.sha256

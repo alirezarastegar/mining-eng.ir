@@ -1,0 +1,103 @@
+name: PlanJoy R7.8.28 Fast Offline Cache Export
+
+on:
+  push:
+    branches: [tmp-planjoy-r7828-build]
+    paths:
+      - '.github/workflows/planjoy-r7828-offline-fast.yml'
+  workflow_dispatch:
+
+jobs:
+  cache-export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --channel=3 'platform-tools' 'platforms;android-37.0' 'build-tools;36.0.0'
+          test -f "$ANDROID_SDK_ROOT/platforms/android-37.0/android.jar"
+          [ -e "$ANDROID_SDK_ROOT/platforms/android-37" ] || ln -s "$ANDROID_SDK_ROOT/platforms/android-37.0" "$ANDROID_SDK_ROOT/platforms/android-37"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Reconstruct R7.8.26 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat planjoy-r7823-source/code/chunk*.b64 | base64 -d > /tmp/source.tar.xz
+          echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/source.tar.xz' | sha256sum -c -
+          rm -rf android_native && mkdir android_native
+          tar -xJf /tmp/source.tar.xz -C android_native
+          python3 planjoy-r7823-source/r7823_compile_patch.py
+          cat planjoy-r7824-source/patch-xz/part*.b64 | base64 -d > /tmp/r7824.patch.xz
+          xz -dc /tmp/r7824.patch.xz > /tmp/r7824.patch
+          patch --batch --forward -p1 -d android_native < /tmp/r7824.patch
+          python3 planjoy-r7824-source/hotfix/compile-fix.py
+          cat planjoy-r7824-source/final-patch/part*.b64 | base64 -d > /tmp/r7824-final.patch.xz
+          xz -dc /tmp/r7824-final.patch.xz > /tmp/r7824-final.patch
+          patch --batch --forward -p1 -d android_native < /tmp/r7824-final.patch
+          python3 planjoy-r7824-source/final-compile-fix.py
+          cat planjoy-r7825-source/patch2/part*.b64 | base64 -d > /tmp/r7825.patch.xz
+          xz -dc /tmp/r7825.patch.xz > /tmp/r7825.patch
+          patch --batch --forward -p1 -d android_native < /tmp/r7825.patch
+          python3 planjoy-r7825-source/compile-fix.py
+          cat planjoy-r7826-source/patch/part*.b64 | base64 -d > /tmp/r7826.patch.xz
+          xz -dc /tmp/r7826.patch.xz > /tmp/r7826.patch
+          set +e
+          patch --batch --forward -p1 -d android_native < /tmp/r7826.patch
+          rc=$?
+          set -e
+          mapfile -t rej < <(find android_native -type f -name '*.rej' | sort)
+          test "$rc" -eq 1
+          test "${#rej[@]}" -eq 1
+          rm -f "${rej[0]}"
+          python3 planjoy-r7826-source/compile-fix.py
+      - name: Restore compile-only resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=android_native/app/src/main/res/drawable; R=android_native/app/src/main/res/raw; F=android_native/app/src/main/res/font
+          mkdir -p "$D" "$R" "$F"
+          SYSFONT=$(find /usr/share/fonts -type f \( -iname '*.ttf' -o -iname '*.otf' \) | head -1); test -n "$SYSFONT"; cp "$SYSFONT" "$F/iransans_xv.ttf"
+          PNG='iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8////fwYGBgYmBigAAD34BADaOyqcAAAAAElFTkSuQmCC'
+          WEBP='UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoCAAIAAUAmJaQAA3AA/vz0AAA='
+          for n in pj_original_today_header pj_original_calendar pj_original_focus_stats pj_priority_clock_duck pj_priority_focus_duck pj_priority_analysis; do printf '%s' "$PNG" | base64 -d > "$D/$n.png"; done
+          for n in pj_original_focus_scene pj_original_task_ducks pj_priority_first_plan; do printf '%s' "$WEBP" | base64 -d > "$D/$n.webp"; done
+          python3 - <<'PY'
+          import wave,struct
+          from pathlib import Path
+          p=Path('android_native/app/src/main/res/raw')
+          for n in ['complete','focus_end','focus_start','page_turn','pause','reward_chime','soft_bell','soft_pop']:
+              with wave.open(str(p/(n+'.wav')),'wb') as w:
+                  w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000); w.writeframes(struct.pack('<h',0)*80)
+          PY
+          cat planjoy-r7824-source/final-icon/part*.b64 | base64 -d > "$D/planjoy_launcher.png"
+      - name: Populate dependencies
+        working-directory: android_native
+        run: gradle :app:compileProductionReleaseKotlin :app:assembleProductionRelease --no-daemon --stacktrace
+      - name: Stage fast offline bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p offline/gradle offline/android-sdk
+          cp -a "$HOME/.gradle/caches" offline/gradle/
+          cp -a "$ANDROID_SDK_ROOT/platforms/android-37.0" offline/android-sdk/
+          cp -a "$ANDROID_SDK_ROOT/build-tools/36.0.0" offline/android-sdk/
+          cp -a "$ANDROID_SDK_ROOT/platform-tools" offline/android-sdk/
+          du -sh offline/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoy-R7828-offline-fast
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          include-hidden-files: true
+          path: offline/

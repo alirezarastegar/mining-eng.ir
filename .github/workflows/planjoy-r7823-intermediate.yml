@@ -6,6 +6,7 @@ on:
     branches: [tmp-planjoy-r7823-build]
     paths:
       - '.github/workflows/planjoy-r7823-intermediate.yml'
+      - 'planjoy-r7823-source/r7823_compile_patch.py'
 
 jobs:
   build:
@@ -25,11 +26,15 @@ jobs:
           sdkmanager --channel=3 'platform-tools' 'platforms;android-37.0' 'build-tools;37.0.0'
           test -f "$ANDROID_SDK_ROOT/platforms/android-37.0/android.jar"
           test -x "$ANDROID_SDK_ROOT/build-tools/37.0.0/aapt2"
+          if [ ! -e "$ANDROID_SDK_ROOT/platforms/android-37" ]; then
+            ln -s "$ANDROID_SDK_ROOT/platforms/android-37.0" "$ANDROID_SDK_ROOT/platforms/android-37"
+          fi
+          test -f "$ANDROID_SDK_ROOT/platforms/android-37/android.jar"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
 
-      - name: Reconstruct verified source
+      - name: Reconstruct exact verified R7.8.23 source
         shell: bash
         run: |
           set -euo pipefail
@@ -43,16 +48,7 @@ jobs:
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78023' android_native/app/build.gradle.kts
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+23"' android_native/app/build.gradle.kts
 
-      - name: Bind SDK 37.0 to numeric compileSdk 37
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ ! -e "$ANDROID_SDK_ROOT/platforms/android-37" ]; then
-            ln -s "$ANDROID_SDK_ROOT/platforms/android-37.0" "$ANDROID_SDK_ROOT/platforms/android-37"
-          fi
-          test -f "$ANDROID_SDK_ROOT/platforms/android-37/android.jar"
-
-      - name: Add non-deliverable valid font placeholder and verify R7.8.23 parity
+      - name: Verify original Windows parity contract 15/15
         working-directory: android_native
         shell: bash
         run: |
@@ -64,7 +60,42 @@ jobs:
           python3 tests/r7823_windows_parity_contract.py | tee ../r7823-parity.txt
           grep -q 'SUMMARY 15/15 PASS' ../r7823-parity.txt
 
-      - name: Build lint and align unsigned release
+      - name: Apply strict compile fixes and four-unique-priority-art binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 planjoy-r7823-source/r7823_compile_patch.py
+          grep -q 'object CutePalette' android_native/app/src/main/java/com/planjoy/r7/AppUi.kt
+          grep -q 'import java.time.Instant' android_native/app/src/main/java/com/planjoy/r7/R78Features.kt
+          ! grep -q 'private fun Focus(c:Context,f:Boolean)=R78FocusScreen(c,f)' android_native/app/src/main/java/com/planjoy/r7/AppUi.kt
+          grep -q 'pj_priority_clock_duck' android_native/app/src/main/java/com/planjoy/r7/R72Features.kt
+          grep -q 'pj_priority_focus_duck' android_native/app/src/main/java/com/planjoy/r7/R72Features.kt
+          grep -q 'pj_priority_first_plan' android_native/app/src/main/java/com/planjoy/r7/R72Features.kt
+          grep -q 'pj_priority_analysis' android_native/app/src/main/java/com/planjoy/r7/R72Features.kt
+
+      - name: Create replaceable CI-only binary resource placeholders
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=android_native/app/src/main/res/drawable
+          R=android_native/app/src/main/res/raw
+          mkdir -p "$D" "$R"
+          PNG='iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8////fwYGBgYmBigAAD34BADaOyqcAAAAAElFTkSuQmCC'
+          WEBP='UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoCAAIAAUAmJaQAA3AA/vz0AAA='
+          for n in pj_original_today_header pj_original_calendar pj_original_focus_stats pj_priority_clock_duck pj_priority_focus_duck pj_priority_analysis; do printf '%s' "$PNG" | base64 -d > "$D/$n.png"; done
+          for n in pj_original_focus_scene pj_original_task_ducks pj_priority_first_plan; do printf '%s' "$WEBP" | base64 -d > "$D/$n.webp"; done
+          python3 - <<'PY'
+          import wave, struct
+          from pathlib import Path
+          root=Path('android_native/app/src/main/res/raw'); root.mkdir(parents=True,exist_ok=True)
+          for name in ['complete','focus_end','focus_start','page_turn','pause','reward_chime','soft_bell','soft_pop']:
+              with wave.open(str(root/(name+'.wav')),'wb') as w:
+                  w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000); w.writeframes(struct.pack('<h',0)*80)
+          PY
+          find android_native/app/src/main/res/drawable -maxdepth 1 -type f -name 'pj_*' -print | sort
+          find android_native/app/src/main/res/raw -maxdepth 1 -type f -print | sort
+
+      - name: Build and lint production release
         working-directory: android_native
         shell: bash
         run: |
@@ -79,7 +110,7 @@ jobs:
           "$ANDROID_SDK_ROOT/build-tools/37.0.0/aapt2" dump badging ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk | tee ../r7823-intermediate-badging.txt
           grep -q "package: name='app.planjoy.local' versionCode='78023' versionName='0.7.8+23'" ../r7823-intermediate-badging.txt
 
-      - name: Package official signing verification tools
+      - name: Package Build Tools needed for private finalization
         shell: bash
         run: |
           set -euo pipefail
@@ -90,21 +121,28 @@ jobs:
           chmod +x toolpack/apksigner toolpack/zipalign toolpack/aapt2
           tar -czf PlanJoy-Android-BuildTools37-Linux.tar.gz -C toolpack .
 
-      - name: Package clean source without font binary
+      - name: Package corrected source skeleton without CI placeholders
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$RUNNER_TEMP/PlanJoyR7823-Android-Source"
-          cp -a android_native "$RUNNER_TEMP/PlanJoyR7823-Android-Source"
-          find "$RUNNER_TEMP/PlanJoyR7823-Android-Source" -type d \( -name build -o -name .gradle \) -prune -exec rm -rf {} +
-          find "$RUNNER_TEMP/PlanJoyR7823-Android-Source" -type f \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.p12' -o -iname '*.pfx' -o -iname '*.jks' -o -iname '*.keystore' \) -delete
-          cat > "$RUNNER_TEMP/PlanJoyR7823-Android-Source/FONT-ASSET-NOT-INCLUDED.md" <<'EOF'
+          OUT="$RUNNER_TEMP/PlanJoyR7823-Android-Source"
+          rm -rf "$OUT" && cp -a android_native "$OUT"
+          find "$OUT" -type d \( -name build -o -name .gradle \) -prune -exec rm -rf {} +
+          find "$OUT" -type f \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.p12' -o -iname '*.pfx' -o -iname '*.jks' -o -iname '*.keystore' \) -delete
+          rm -f "$OUT/app/src/main/res/drawable/pj_original_today_header.png" "$OUT/app/src/main/res/drawable/pj_original_calendar.png" "$OUT/app/src/main/res/drawable/pj_original_focus_stats.png" "$OUT/app/src/main/res/drawable/pj_original_focus_scene.webp" "$OUT/app/src/main/res/drawable/pj_original_task_ducks.webp"
+          rm -f "$OUT/app/src/main/res/drawable/pj_priority_clock_duck.png" "$OUT/app/src/main/res/drawable/pj_priority_focus_duck.png" "$OUT/app/src/main/res/drawable/pj_priority_first_plan.webp" "$OUT/app/src/main/res/drawable/pj_priority_analysis.png"
+          rm -rf "$OUT/app/src/main/res/raw"
+          cat > "$OUT/FONT-ASSET-NOT-INCLUDED.md" <<'EOF'
           # Font asset
           The authorized binary font is intentionally omitted from this source distribution.
           Production expects app/src/main/res/font/iransans_xv.ttf.
           EOF
-          (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/PlanJoyR7823-Android-Source-v0.7.8.23.zip" PlanJoyR7823-Android-Source)
-          sha256sum PlanJoyR7823-Android-Source-v0.7.8.23.zip > PlanJoyR7823-Android-Source-SHA256.txt
+          cat > "$OUT/RESOURCE-ASSETS-PENDING-PRIVATE-FINALIZATION.md" <<'EOF'
+          # Binary resource finalization
+          CI compiled with disposable same-name placeholders. The final delivery process replaces them with SHA-verified canonical PlanJoy images, sounds and four distinct priority artworks before signing, and injects those canonical non-font resources into the delivered clean source archive.
+          EOF
+          (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/PlanJoyR7823-Android-Source-Skeleton.zip" PlanJoyR7823-Android-Source)
+          sha256sum PlanJoyR7823-Android-Source-Skeleton.zip > PlanJoyR7823-Android-Source-Skeleton-SHA256.txt
 
       - uses: actions/upload-artifact@v4
         with:
@@ -115,8 +153,8 @@ jobs:
           path: |
             PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
             PlanJoy-Android-BuildTools37-Linux.tar.gz
-            PlanJoyR7823-Android-Source-v0.7.8.23.zip
-            PlanJoyR7823-Android-Source-SHA256.txt
+            PlanJoyR7823-Android-Source-Skeleton.zip
+            PlanJoyR7823-Android-Source-Skeleton-SHA256.txt
             r7823-parity.txt
             r7823-intermediate-badging.txt
             android_native/app/build/reports/lint-results-productionRelease.txt

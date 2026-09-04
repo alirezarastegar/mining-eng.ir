@@ -1,0 +1,159 @@
+name: PlanJoy R7.8.26 Final Build v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tmp-planjoy-r7823-build]
+    paths:
+      - '.github/workflows/planjoy-r7826-final2.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 37
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --channel=3 'platform-tools' 'platforms;android-37.0' 'build-tools;37.0.0'
+          test -f "$ANDROID_SDK_ROOT/platforms/android-37.0/android.jar"
+          [ -e "$ANDROID_SDK_ROOT/platforms/android-37" ] || ln -s "$ANDROID_SDK_ROOT/platforms/android-37.0" "$ANDROID_SDK_ROOT/platforms/android-37"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Reconstruct certified R7.8.25 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat planjoy-r7823-source/code/chunk*.b64 | base64 -d > /tmp/source.tar.xz
+          echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/source.tar.xz' | sha256sum -c -
+          rm -rf android_native && mkdir android_native
+          tar -xJf /tmp/source.tar.xz -C android_native
+          python3 planjoy-r7823-source/r7823_compile_patch.py
+          cat planjoy-r7824-source/patch-xz/part*.b64 | base64 -d > /tmp/r7824.patch.xz
+          echo '180b2b928580d394a8dfb4c011a72dfc915d3820e7b72f52d0dd8e39452b0904  /tmp/r7824.patch.xz' | sha256sum -c -
+          xz -dc /tmp/r7824.patch.xz > /tmp/r7824.patch
+          patch --batch --forward -p1 -d android_native < /tmp/r7824.patch
+          python3 planjoy-r7824-source/hotfix/compile-fix.py
+          cat planjoy-r7824-source/final-patch/part*.b64 | base64 -d > /tmp/user2.patch.xz
+          echo 'ee3fb65cf2ce5aca6620688cbc1d1a044fcceb24dfdc0d35020341f51d933e4d  /tmp/user2.patch.xz' | sha256sum -c -
+          xz -dc /tmp/user2.patch.xz > /tmp/user2.patch
+          patch --batch --forward -p1 -d android_native < /tmp/user2.patch
+          python3 planjoy-r7824-source/final-compile-fix.py
+          cat planjoy-r7825-source/patch2/part*.b64 | base64 -d > /tmp/r7825.patch.xz
+          echo '609cf104135b31a3130fb253d998f83150aab2b2b08f43180b403f9b3fe5f94b  /tmp/r7825.patch.xz' | sha256sum -c -
+          xz -dc /tmp/r7825.patch.xz > /tmp/r7825.patch
+          echo '288bc9792df2fff18c9a58961cc381cbf66e3fe0ed0aa0fe158f23e51a92e008  /tmp/r7825.patch' | sha256sum -c -
+          patch --batch --forward -p1 -d android_native < /tmp/r7825.patch
+          python3 planjoy-r7825-source/compile-fix.py
+
+      - name: Apply R7.8.26 app patch with strict single historical-test exception
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat planjoy-r7826-source/patch/part*.b64 | base64 -d > /tmp/r7826.patch.xz
+          echo '59b608f7c8658417689846111a9cca450a5fe3d04e7954e4dcaffa5ccf9c56e4  /tmp/r7826.patch.xz' | sha256sum -c -
+          xz -t /tmp/r7826.patch.xz
+          xz -dc /tmp/r7826.patch.xz > /tmp/r7826.patch
+          echo '1a68b60f41b4ec890db13823b03b50ca8eada81aef9c7e1e62cd8fe7d7624060  /tmp/r7826.patch' | sha256sum -c -
+          set +e
+          patch --batch --forward -p1 -d android_native < /tmp/r7826.patch
+          PATCH_RC=$?
+          set -e
+          mapfile -t REJECTS < <(find android_native -type f -name '*.rej' | sort)
+          test "$PATCH_RC" -eq 1
+          test "${#REJECTS[@]}" -eq 1
+          test "${REJECTS[0]}" = 'android_native/tests/r7823_windows_parity_contract.py.rej'
+          rm -f "${REJECTS[0]}"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('android_native/tests/r7823_windows_parity_contract.py')
+          s=p.read_text(encoding='utf-8')
+          s=(s.replace('78025','78026')
+              .replace('0.7.8+25','0.7.8+26')
+              .replace('R7.8.25-SETTINGS-NAV-LANGUAGE-POLISH','R7.8.26-WIDGET-CALENDAR-CATEGORY-SYNC-PARITY'))
+          p.write_text(s,encoding='utf-8')
+          PY
+          test -z "$(find android_native -type f -name '*.rej' -print -quit)"
+          grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78026' android_native/app/build.gradle.kts
+          grep -q 'versionName="0.7.8+26"' android_native/app/build.gradle.kts
+          grep -q 'R7.8.26-WIDGET-CALENDAR-CATEGORY-SYNC-PARITY' android_native/app/src/main/java/com/planjoy/r7/BuildInfo.kt
+          test -f android_native/app/src/main/java/com/planjoy/r7/R7826Widgets.kt
+          test -f android_native/app/src/main/java/com/planjoy/r7/R7826Parity.kt
+          test "$(grep -c 'android:resource="@xml/r7826_reference_widget_info"' android_native/app/src/main/AndroidManifest.xml)" -eq 21
+
+      - name: Restore compile-only production-shaped resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=android_native/app/src/main/res/drawable; R=android_native/app/src/main/res/raw; F=android_native/app/src/main/res/font
+          mkdir -p "$D" "$R" "$F"
+          SYSFONT=$(find /usr/share/fonts -type f \( -iname '*.ttf' -o -iname '*.otf' \) | head -1); test -n "$SYSFONT"; cp "$SYSFONT" "$F/iransans_xv.ttf"
+          PNG='iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8////fwYGBgYmBigAAD34BADaOyqcAAAAAElFTkSuQmCC'
+          WEBP='UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoCAAIAAUAmJaQAA3AA/vz0AAA='
+          for n in pj_original_today_header pj_original_calendar pj_original_focus_stats pj_priority_clock_duck pj_priority_focus_duck pj_priority_analysis; do printf '%s' "$PNG" | base64 -d > "$D/$n.png"; done
+          for n in pj_original_focus_scene pj_original_task_ducks pj_priority_first_plan; do printf '%s' "$WEBP" | base64 -d > "$D/$n.webp"; done
+          python3 - <<'PY'
+          import wave,struct
+          from pathlib import Path
+          p=Path('android_native/app/src/main/res/raw')
+          for n in ['complete','focus_end','focus_start','page_turn','pause','reward_chime','soft_bell','soft_pop']:
+              with wave.open(str(p/(n+'.wav')),'wb') as w:
+                  w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000); w.writeframes(struct.pack('<h',0)*80)
+          PY
+          cat planjoy-r7824-source/final-icon/part*.b64 | base64 -d > "$D/planjoy_launcher.png"
+
+      - name: Run all R7.8.26 contracts and regressions
+        working-directory: android_native
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/r7826_widget_calendar_sync_contract.py | tee ../r7826-contract.txt
+          grep -q 'SUMMARY 14/14 PASS' ../r7826-contract.txt
+          python3 tests/r7825_settings_navigation_contract.py | tee ../r7825-contract.txt
+          grep -q 'SUMMARY 12/12 PASS' ../r7825-contract.txt
+          python3 tests/r7824_mobile_ui_restore_contract.py | tee ../r7824-contract.txt
+          grep -q 'SUMMARY 27/27 PASS' ../r7824-contract.txt
+          python3 tests/r7821_android_static_contract.py | tee ../r7821-contract.txt
+          grep -q 'R7823_ANDROID_STATIC_CONTRACT_PASS 57' ../r7821-contract.txt
+          python3 tests/r7823_windows_parity_contract.py | tee ../r7823-contract.txt
+          grep -q 'SUMMARY 15/15 PASS' ../r7823-contract.txt
+
+      - name: Compile assemble lint align and inspect
+        working-directory: android_native
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle clean :app:compileProductionReleaseKotlin :app:assembleProductionRelease :app:lintProductionRelease --no-daemon --no-build-cache --stacktrace
+          test -f app/build/reports/lint-results-productionRelease.txt
+          ! grep -q ': Error:' app/build/reports/lint-results-productionRelease.txt
+          APK=$(find app/build/outputs/apk/production/release -name '*.apk' -type f | head -n1); test -n "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -f -P 16 -v 4 "$APK" ../PlanJoyR7826-Android-INTERMEDIATE-ALIGNED.apk
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -c -P 16 -v 4 ../PlanJoyR7826-Android-INTERMEDIATE-ALIGNED.apk
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/aapt2" dump badging ../PlanJoyR7826-Android-INTERMEDIATE-ALIGNED.apk | tee ../r7826-badging.txt
+          grep -q "package: name='app.planjoy.local' versionCode='78026' versionName='0.7.8+26'" ../r7826-badging.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoy-R7826-Compile-PASS-v2
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            PlanJoyR7826-Android-INTERMEDIATE-ALIGNED.apk
+            r7826-contract.txt
+            r7825-contract.txt
+            r7824-contract.txt
+            r7821-contract.txt
+            r7823-contract.txt
+            r7826-badging.txt
+            android_native/app/build/reports/lint-results-productionRelease.txt
+            android_native/app/build/reports/lint-results-productionRelease.html

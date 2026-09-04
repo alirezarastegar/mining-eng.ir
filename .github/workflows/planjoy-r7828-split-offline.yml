@@ -1,0 +1,62 @@
+name: PlanJoy R7.8.28 Split Offline Build Environment
+
+on:
+  push:
+    branches: [tmp-planjoy-r7828-build]
+    paths:
+      - '.github/workflows/planjoy-r7828-split-offline.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  split:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download successful offline bundle artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -o /tmp/offline-artifact.zip \
+            "https://api.github.com/repos/alirezarastegar/mining-eng.ir/actions/artifacts/9949032041/zip"
+          mkdir extracted
+          unzip -q /tmp/offline-artifact.zip -d extracted
+          test -f extracted/PlanJoyR7828-offline-build-env.tar.xz
+          sha256sum -c extracted/PlanJoyR7828-offline-build-env.sha256
+      - name: Split bundle into transferable chunks
+        shell: bash
+        run: |
+          set -euo pipefail
+          split -b 280M -d -a 2 extracted/PlanJoyR7828-offline-build-env.tar.xz PlanJoyR7828-offline-build-env.part-
+          sha256sum PlanJoyR7828-offline-build-env.part-* > PlanJoyR7828-offline-parts.sha256
+          ls -lh PlanJoyR7828-offline-build-env.part-*
+          test "$(find . -maxdepth 1 -name 'PlanJoyR7828-offline-build-env.part-*' | wc -l)" -eq 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoy-R7828-offline-part-00
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: PlanJoyR7828-offline-build-env.part-00
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoy-R7828-offline-part-01
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: PlanJoyR7828-offline-build-env.part-01
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoy-R7828-offline-parts-sha256
+          retention-days: 7
+          if-no-files-found: error
+          path: PlanJoyR7828-offline-parts.sha256

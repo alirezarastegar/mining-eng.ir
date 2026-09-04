@@ -1,0 +1,108 @@
+name: PlanJoy R7.8.23 Secure Unsigned Intermediate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tmp-planjoy-r7823-build]
+    paths:
+      - '.github/workflows/planjoy-r7823-intermediate.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36 / Build Tools 36.0.0
+        run: sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Reconstruct verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat planjoy-r7823-source/code/chunk*.b64 > /tmp/source.b64
+          base64 -d /tmp/source.b64 > /tmp/source.tar.xz
+          echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/source.tar.xz' | sha256sum -c -
+          xz -t /tmp/source.tar.xz
+          rm -rf android_native && mkdir android_native
+          tar -xJf /tmp/source.tar.xz -C android_native
+          sed -i 's/compileSdk[[:space:]]*=[[:space:]]*37/compileSdk = 36/g; s/targetSdk[[:space:]]*=[[:space:]]*37/targetSdk = 36/g' android_native/app/build.gradle.kts
+          grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78023' android_native/app/build.gradle.kts
+          grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+23"' android_native/app/build.gradle.kts
+
+      - name: Add non-deliverable build placeholder and run contracts
+        working-directory: android_native
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/res/font
+          printf 'PLANJOY_INTERMEDIATE_ONLY' > app/src/main/res/font/iransans_xv.ttf
+          python3 tests/r7823_windows_parity_contract.py | tee ../r7823-parity.txt
+          python3 tests/r78_android_native_contract.py | tee ../r7823-native-contract.txt
+
+      - name: Build lint and align unsigned release
+        working-directory: android_native
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle clean :app:compileProductionReleaseKotlin :app:assembleProductionRelease :app:lintProductionRelease --no-daemon --no-build-cache --stacktrace
+          test -f app/build/reports/lint-results-productionRelease.txt
+          ! grep -q ': Error:' app/build/reports/lint-results-productionRelease.txt
+          APK=$(find app/build/outputs/apk/production/release -name '*.apk' -type f | head -1)
+          test -n "$APK" && test -f "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -f -P 16 -v 4 "$APK" ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2" dump badging ../PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk | tee ../r7823-intermediate-badging.txt
+          grep -q "package: name='app.planjoy.local' versionCode='78023' versionName='0.7.8+23'" ../r7823-intermediate-badging.txt
+
+      - name: Package official signing verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_SDK_ROOT/build-tools/36.0.0"
+          mkdir -p toolpack/lib
+          cp "$BT/apksigner" "$BT/zipalign" "$BT/aapt2" toolpack/
+          cp "$BT/lib/apksigner.jar" toolpack/lib/
+          chmod +x toolpack/apksigner toolpack/zipalign toolpack/aapt2
+          tar -czf PlanJoy-Android-BuildTools36-Linux.tar.gz -C toolpack .
+
+      - name: Package clean source without font binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/PlanJoyR7823-Android-Source"
+          cp -a android_native "$RUNNER_TEMP/PlanJoyR7823-Android-Source"
+          find "$RUNNER_TEMP/PlanJoyR7823-Android-Source" -type d \( -name build -o -name .gradle \) -prune -exec rm -rf {} +
+          find "$RUNNER_TEMP/PlanJoyR7823-Android-Source" -type f \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.p12' -o -iname '*.pfx' -o -iname '*.jks' -o -iname '*.keystore' \) -delete
+          cat > "$RUNNER_TEMP/PlanJoyR7823-Android-Source/FONT-ASSET-NOT-INCLUDED.md" <<'EOF'
+          # Font asset
+          The authorized binary font is intentionally omitted from this source distribution.
+          Production expects app/src/main/res/font/iransans_xv.ttf.
+          EOF
+          (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/PlanJoyR7823-Android-Source-v0.7.8.23.zip" PlanJoyR7823-Android-Source)
+          sha256sum PlanJoyR7823-Android-Source-v0.7.8.23.zip > PlanJoyR7823-Android-Source-SHA256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoy-R7823-Intermediate
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            PlanJoyR7823-Android-INTERMEDIATE-ALIGNED.apk
+            PlanJoy-Android-BuildTools36-Linux.tar.gz
+            PlanJoyR7823-Android-Source-v0.7.8.23.zip
+            PlanJoyR7823-Android-Source-SHA256.txt
+            r7823-parity.txt
+            r7823-native-contract.txt
+            r7823-intermediate-badging.txt
+            android_native/app/build/reports/lint-results-productionRelease.txt
+            android_native/app/build/reports/lint-results-productionRelease.html

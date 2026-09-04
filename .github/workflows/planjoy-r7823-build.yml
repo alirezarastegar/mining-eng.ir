@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/planjoy-r7823-build.yml'
       - 'planjoy-r7823-source/code/**'
+      - 'planjoy-r7823-source/secure/**'
 
 jobs:
   android-release:
@@ -14,16 +15,20 @@ jobs:
     timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: android-actions/setup-android@v3
+
       - name: Install Android SDK 36 / Build Tools 36.0.0
         shell: bash
         run: |
           set -euo pipefail
           sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -46,6 +51,92 @@ jobs:
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78023' android_native/app/build.gradle.kts
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+23"' android_native/app/build.gradle.kts
 
+      - name: Restore persistent R7.7+ release signer
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.PLANJOY_ANDROID_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.PLANJOY_ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PLANJOY_ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PLANJOY_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KS_B64" || { echo 'Missing PLANJOY_ANDROID_KEYSTORE_B64' >&2; exit 20; }
+          test -n "$STORE_PASSWORD" || { echo 'Missing PLANJOY_ANDROID_STORE_PASSWORD' >&2; exit 20; }
+          test -n "$KEY_ALIAS" || { echo 'Missing PLANJOY_ANDROID_KEY_ALIAS' >&2; exit 20; }
+          test -n "$KEY_PASSWORD" || { echo 'Missing PLANJOY_ANDROID_KEY_PASSWORD' >&2; exit 20; }
+          printf '%s' "$KS_B64" | base64 --decode > "$RUNNER_TEMP/planjoy-release.p12"
+          echo "PLANJOY_ANDROID_KEYSTORE=$RUNNER_TEMP/planjoy-release.p12" >> "$GITHUB_ENV"
+          echo "PLANJOY_ANDROID_STORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "PLANJOY_ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "PLANJOY_ANDROID_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Reconstruct and decrypt authorized IranSans build asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat planjoy-r7823-source/secure/font.enc.*.b64 > /tmp/font.encpkg.b64
+          base64 -d /tmp/font.encpkg.b64 > /tmp/font.encpkg
+          echo '7ccc96e2b786b6a2fc5e6eff7b5f181a05bc49ba2650e162dd2573c5bbd18227  /tmp/font.encpkg' | sha256sum -c -
+
+          cat > "$RUNNER_TEMP/PlanJoyFontDecrypt.java" <<'JAVA'
+          import java.io.*;
+          import java.nio.file.*;
+          import java.security.*;
+          import java.security.spec.MGF1ParameterSpec;
+          import java.util.*;
+          import javax.crypto.*;
+          import javax.crypto.spec.*;
+
+          public final class PlanJoyFontDecrypt {
+            public static void main(String[] args) throws Exception {
+              if (args.length != 6) throw new IllegalArgumentException("expected 6 args");
+              byte[] pkg = Files.readAllBytes(Path.of(args[4]));
+              byte[] magic = "PJFNT001".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+              if (pkg.length < 548 || !Arrays.equals(Arrays.copyOfRange(pkg, 0, 8), magic))
+                throw new SecurityException("invalid font package");
+
+              byte[] nonce = Arrays.copyOfRange(pkg, 8, 20);
+              byte[] wrapped = Arrays.copyOfRange(pkg, 20, 532);
+              byte[] ciphertext = Arrays.copyOfRange(pkg, 532, pkg.length);
+
+              KeyStore ks = KeyStore.getInstance("PKCS12");
+              try (InputStream in = Files.newInputStream(Path.of(args[0]))) {
+                ks.load(in, args[1].toCharArray());
+              }
+              Key key = ks.getKey(args[2], args[3].toCharArray());
+              if (!(key instanceof PrivateKey)) throw new SecurityException("signer private key unavailable");
+
+              OAEPParameterSpec oaep = new OAEPParameterSpec(
+                "SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT);
+              Cipher rsa = Cipher.getInstance("RSA/ECB/OAEPPadding");
+              rsa.init(Cipher.DECRYPT_MODE, (PrivateKey) key, oaep);
+              byte[] aesKey = rsa.doFinal(wrapped);
+              if (aesKey.length != 32) throw new SecurityException("unexpected AES key length");
+
+              Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
+              gcm.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new GCMParameterSpec(128, nonce));
+              gcm.updateAAD("planjoy-r7823-iransans".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+              byte[] gz = gcm.doFinal(ciphertext);
+              Files.write(Path.of(args[5]), gz);
+              Arrays.fill(aesKey, (byte)0);
+            }
+          }
+          JAVA
+
+          javac "$RUNNER_TEMP/PlanJoyFontDecrypt.java"
+          java -cp "$RUNNER_TEMP" PlanJoyFontDecrypt \
+            "$PLANJOY_ANDROID_KEYSTORE" \
+            "$PLANJOY_ANDROID_STORE_PASSWORD" \
+            "$PLANJOY_ANDROID_KEY_ALIAS" \
+            "$PLANJOY_ANDROID_KEY_PASSWORD" \
+            /tmp/font.encpkg \
+            /tmp/iransans.ttf.gz
+
+          mkdir -p android_native/app/src/main/res/font
+          gzip -dc /tmp/iransans.ttf.gz > android_native/app/src/main/res/font/iransans_xv.ttf
+          echo '032d3ab20158ce7213e9018197c150000270d96a83e84db68911d71bdbe47240  android_native/app/src/main/res/font/iransans_xv.ttf' | sha256sum -c -
+          rm -f /tmp/iransans.ttf.gz /tmp/font.encpkg /tmp/font.encpkg.b64 "$RUNNER_TEMP/PlanJoyFontDecrypt.java" "$RUNNER_TEMP/PlanJoyFontDecrypt.class"
+
       - name: Verify R7.8.23 Windows parity contracts
         working-directory: android_native
         shell: bash
@@ -63,18 +154,7 @@ jobs:
           echo '735973c5f01c88a6a85b81668e077e5aa39abdc11f523eb8628fb2745d8b9dc3  android_native/app/src/main/res/drawable/pj_original_focus_scene.webp' | sha256sum -c -
           echo '746d865ed85ce0f9b6d60b790d2685e7e217e205de537c23d6e2eb12f4fb46b7  android_native/app/src/main/res/drawable/pj_original_focus_stats.png' | sha256sum -c -
           echo '1eff77f0c7c065fd518e41116abf2377182d0d564aa165e8745cca90c60b1c48  android_native/app/src/main/res/drawable/pj_original_task_ducks.webp' | sha256sum -c -
-          test -s android_native/app/src/main/res/font/iransans_xv.ttf || { echo 'Authorized IranSans project asset is absent; refusing fallback substitution.' >&2; exit 22; }
-
-      - name: Restore persistent R7.7+ release signer
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n '${{ secrets.PLANJOY_ANDROID_KEYSTORE_B64 }}' || { echo 'Missing PLANJOY_ANDROID_KEYSTORE_B64' >&2; exit 20; }
-          echo '${{ secrets.PLANJOY_ANDROID_KEYSTORE_B64 }}' | base64 --decode > "$RUNNER_TEMP/planjoy-release.p12"
-          echo "PLANJOY_ANDROID_KEYSTORE=$RUNNER_TEMP/planjoy-release.p12" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_STORE_PASSWORD=${{ secrets.PLANJOY_ANDROID_STORE_PASSWORD }}" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_KEY_ALIAS=${{ secrets.PLANJOY_ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_KEY_PASSWORD=${{ secrets.PLANJOY_ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          echo '032d3ab20158ce7213e9018197c150000270d96a83e84db68911d71bdbe47240  android_native/app/src/main/res/font/iransans_xv.ttf' | sha256sum -c -
 
       - name: Build and lint signed production release
         working-directory: android_native

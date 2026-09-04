@@ -16,16 +16,9 @@ jobs:
           cat planjoy-r7823-source/code/chunk*.b64 | base64 -d > /tmp/src.tar.xz
           echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/src.tar.xz' | sha256sum -c -
           mkdir src && tar -xJf /tmp/src.tar.xz -C src
-      - name: Print targeted source windows
+      - name: Print navigation window
         shell: bash
         run: |
           set -euo pipefail
-          K=src/app/src/main/java/com/planjoy/r7
-          echo '=== AppUi imports + 200-260 ==='; sed -n '1,100p' "$K/AppUi.kt"; sed -n '200,260p' "$K/AppUi.kt"
-          echo '=== R78Features imports + 120-195 ==='; sed -n '1,80p' "$K/R78Features.kt"; sed -n '120,195p' "$K/R78Features.kt"
-          echo '=== R72Features 170-205 + 255-300 ==='; sed -n '170,205p' "$K/R72Features.kt"; sed -n '255,300p' "$K/R72Features.kt"
-          echo '=== FocusStats 1-90 ==='; sed -n '1,90p' "$K/R7821FocusStats.kt"
-          echo '=== SoundFx ==='; cat "$K/SoundFx.kt"
-          echo '=== CutePalette declarations ==='; grep -R -n 'CutePalette' "$K" || true
-          echo '=== Focus/Today function signatures ==='; grep -R -nE 'fun (R78|R7821|Focus|Today)|onOpenStats|cal:' "$K" | head -120 || true
-          echo '=== RESOURCE TREE ==='; find src/app/src/main/res -maxdepth 2 -type f | sort
+          K=src/app/src/main/java/com/planjoy/r7/AppUi.kt
+          nl -ba "$K" | sed -n '150,210p'

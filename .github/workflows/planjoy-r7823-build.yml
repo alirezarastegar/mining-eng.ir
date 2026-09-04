@@ -15,20 +15,16 @@ jobs:
     timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-
       - uses: android-actions/setup-android@v3
-
       - name: Install Android SDK 36 / Build Tools 36.0.0
         shell: bash
         run: |
           set -euo pipefail
           sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
-
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -41,8 +37,7 @@ jobs:
           base64 -d /tmp/r7823-source.b64 > /tmp/r7823-source.tar.xz
           echo '9bb1f3106dbcea0ec6812e5f3c336ac8c191d4f50df81355d0c70551ea6a0aa3  /tmp/r7823-source.tar.xz' | sha256sum -c -
           xz -t /tmp/r7823-source.tar.xz
-          rm -rf android_native
-          mkdir -p android_native
+          rm -rf android_native && mkdir -p android_native
           tar -xJf /tmp/r7823-source.tar.xz -C android_native
           test -f android_native/app/build.gradle.kts
           test -f android_native/settings.gradle.kts
@@ -51,24 +46,44 @@ jobs:
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78023' android_native/app/build.gradle.kts
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+23"' android_native/app/build.gradle.kts
 
-      - name: Restore persistent R7.7+ release signer
+      - name: Create one-time signer handoff key and receive encrypted signer
         shell: bash
-        env:
-          KS_B64: ${{ secrets.PLANJOY_ANDROID_KEYSTORE_B64 }}
-          STORE_PASSWORD: ${{ secrets.PLANJOY_ANDROID_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.PLANJOY_ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.PLANJOY_ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          test -n "$KS_B64" || { echo 'Missing PLANJOY_ANDROID_KEYSTORE_B64' >&2; exit 20; }
-          test -n "$STORE_PASSWORD" || { echo 'Missing PLANJOY_ANDROID_STORE_PASSWORD' >&2; exit 20; }
-          test -n "$KEY_ALIAS" || { echo 'Missing PLANJOY_ANDROID_KEY_ALIAS' >&2; exit 20; }
-          test -n "$KEY_PASSWORD" || { echo 'Missing PLANJOY_ANDROID_KEY_PASSWORD' >&2; exit 20; }
-          printf '%s' "$KS_B64" | base64 --decode > "$RUNNER_TEMP/planjoy-release.p12"
-          echo "PLANJOY_ANDROID_KEYSTORE=$RUNNER_TEMP/planjoy-release.p12" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_STORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
-          echo "PLANJOY_ANDROID_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          SESSION=$(openssl rand -hex 16)
+          openssl req -x509 -newkey rsa:4096 -keyout "$RUNNER_TEMP/handoff-key.pem" -out "$RUNNER_TEMP/handoff-cert.pem" -days 1 -nodes -subj "/CN=PlanJoy-R7823-$SESSION" >/dev/null 2>&1
+          CERT_B64=$(base64 -w0 "$RUNNER_TEMP/handoff-cert.pem")
+          echo "PLANJOY_HANDOFF_SESSION=$SESSION"
+          echo "PLANJOY_HANDOFF_CERT_B64=$CERT_B64"
+          URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/planjoy-r7823-source/secure-handoff/${SESSION}.cms.b64"
+          FOUND=0
+          for i in $(seq 1 120); do
+            CODE=$(curl -L -sS -o "$RUNNER_TEMP/signer.cms.b64.tmp" -w '%{http_code}' "$URL" || true)
+            if [ "$CODE" = "200" ] && grep -Eq '^[A-Za-z0-9+/=[:space:]]+$' "$RUNNER_TEMP/signer.cms.b64.tmp"; then
+              mv "$RUNNER_TEMP/signer.cms.b64.tmp" "$RUNNER_TEMP/signer.cms.b64"
+              FOUND=1
+              break
+            fi
+            rm -f "$RUNNER_TEMP/signer.cms.b64.tmp"
+            sleep 5
+          done
+          test "$FOUND" = 1 || { echo "Encrypted signer handoff not received for session $SESSION" >&2; exit 20; }
+          tr -d '\r\n\t ' < "$RUNNER_TEMP/signer.cms.b64" | base64 -d > "$RUNNER_TEMP/signer.cms"
+          openssl cms -decrypt -binary -inform DER -inkey "$RUNNER_TEMP/handoff-key.pem" -in "$RUNNER_TEMP/signer.cms" -out "$RUNNER_TEMP/signer.tar.gz"
+          mkdir -p "$RUNNER_TEMP/private-signing"
+          tar -xzf "$RUNNER_TEMP/signer.tar.gz" -C "$RUNNER_TEMP/private-signing"
+          test -s "$RUNNER_TEMP/private-signing/PlanJoy-R77-Recovery-Release.p12"
+          test -s "$RUNNER_TEMP/private-signing/PASSWORD.txt"
+          PASS=$(tr -d '\r\n' < "$RUNNER_TEMP/private-signing/PASSWORD.txt")
+          ALIAS=planjoy-r77-recovery
+          keytool -list -v -storetype PKCS12 -keystore "$RUNNER_TEMP/private-signing/PlanJoy-R77-Recovery-Release.p12" -storepass "$PASS" > "$RUNNER_TEMP/keystore-info.txt"
+          FP=$(grep -A2 'Certificate fingerprints' "$RUNNER_TEMP/keystore-info.txt" | grep 'SHA256:' | head -1 | sed 's/.*SHA256: //' | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')
+          test "$FP" = 'fd23be91dd847ae2046b1fb926001958fe5721ca1aa082e9ab8994e0eff68509' || { echo "Unexpected private signer fingerprint: $FP" >&2; exit 21; }
+          echo "PLANJOY_ANDROID_KEYSTORE=$RUNNER_TEMP/private-signing/PlanJoy-R77-Recovery-Release.p12" >> "$GITHUB_ENV"
+          echo "PLANJOY_ANDROID_STORE_PASSWORD=$PASS" >> "$GITHUB_ENV"
+          echo "PLANJOY_ANDROID_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+          echo "PLANJOY_ANDROID_KEY_PASSWORD=$PASS" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/handoff-key.pem" "$RUNNER_TEMP/handoff-cert.pem" "$RUNNER_TEMP/signer.cms" "$RUNNER_TEMP/signer.cms.b64" "$RUNNER_TEMP/signer.tar.gz"
 
       - name: Reconstruct and decrypt authorized IranSans build asset
         shell: bash
@@ -77,7 +92,6 @@ jobs:
           cat planjoy-r7823-source/secure/font.enc.*.b64 > /tmp/font.encpkg.b64
           base64 -d /tmp/font.encpkg.b64 > /tmp/font.encpkg
           echo '7ccc96e2b786b6a2fc5e6eff7b5f181a05bc49ba2650e162dd2573c5bbd18227  /tmp/font.encpkg' | sha256sum -c -
-
           cat > "$RUNNER_TEMP/PlanJoyFontDecrypt.java" <<'JAVA'
           import java.io.*;
           import java.nio.file.*;
@@ -86,52 +100,22 @@ jobs:
           import java.util.*;
           import javax.crypto.*;
           import javax.crypto.spec.*;
-
           public final class PlanJoyFontDecrypt {
-            public static void main(String[] args) throws Exception {
-              if (args.length != 6) throw new IllegalArgumentException("expected 6 args");
-              byte[] pkg = Files.readAllBytes(Path.of(args[4]));
-              byte[] magic = "PJFNT001".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
-              if (pkg.length < 548 || !Arrays.equals(Arrays.copyOfRange(pkg, 0, 8), magic))
-                throw new SecurityException("invalid font package");
-
-              byte[] nonce = Arrays.copyOfRange(pkg, 8, 20);
-              byte[] wrapped = Arrays.copyOfRange(pkg, 20, 532);
-              byte[] ciphertext = Arrays.copyOfRange(pkg, 532, pkg.length);
-
-              KeyStore ks = KeyStore.getInstance("PKCS12");
-              try (InputStream in = Files.newInputStream(Path.of(args[0]))) {
-                ks.load(in, args[1].toCharArray());
-              }
-              Key key = ks.getKey(args[2], args[3].toCharArray());
-              if (!(key instanceof PrivateKey)) throw new SecurityException("signer private key unavailable");
-
-              OAEPParameterSpec oaep = new OAEPParameterSpec(
-                "SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT);
-              Cipher rsa = Cipher.getInstance("RSA/ECB/OAEPPadding");
-              rsa.init(Cipher.DECRYPT_MODE, (PrivateKey) key, oaep);
-              byte[] aesKey = rsa.doFinal(wrapped);
-              if (aesKey.length != 32) throw new SecurityException("unexpected AES key length");
-
-              Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
-              gcm.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new GCMParameterSpec(128, nonce));
-              gcm.updateAAD("planjoy-r7823-iransans".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-              byte[] gz = gcm.doFinal(ciphertext);
-              Files.write(Path.of(args[5]), gz);
-              Arrays.fill(aesKey, (byte)0);
+            public static void main(String[] a) throws Exception {
+              byte[] p=Files.readAllBytes(Path.of(a[4]));
+              if(p.length<548 || !Arrays.equals(Arrays.copyOfRange(p,0,8),"PJFNT001".getBytes(java.nio.charset.StandardCharsets.US_ASCII))) throw new SecurityException("invalid font package");
+              byte[] nonce=Arrays.copyOfRange(p,8,20), wrapped=Arrays.copyOfRange(p,20,532), ct=Arrays.copyOfRange(p,532,p.length);
+              KeyStore ks=KeyStore.getInstance("PKCS12"); try(InputStream in=Files.newInputStream(Path.of(a[0]))){ks.load(in,a[1].toCharArray());}
+              Key k=ks.getKey(a[2],a[3].toCharArray()); if(!(k instanceof PrivateKey)) throw new SecurityException("private key unavailable");
+              Cipher rsa=Cipher.getInstance("RSA/ECB/OAEPPadding"); rsa.init(Cipher.DECRYPT_MODE,(PrivateKey)k,new OAEPParameterSpec("SHA-256","MGF1",MGF1ParameterSpec.SHA256,PSource.PSpecified.DEFAULT));
+              byte[] aes=rsa.doFinal(wrapped); if(aes.length!=32) throw new SecurityException("bad AES key");
+              Cipher g=Cipher.getInstance("AES/GCM/NoPadding"); g.init(Cipher.DECRYPT_MODE,new SecretKeySpec(aes,"AES"),new GCMParameterSpec(128,nonce)); g.updateAAD("planjoy-r7823-iransans".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+              Files.write(Path.of(a[5]),g.doFinal(ct)); Arrays.fill(aes,(byte)0);
             }
           }
           JAVA
-
           javac "$RUNNER_TEMP/PlanJoyFontDecrypt.java"
-          java -cp "$RUNNER_TEMP" PlanJoyFontDecrypt \
-            "$PLANJOY_ANDROID_KEYSTORE" \
-            "$PLANJOY_ANDROID_STORE_PASSWORD" \
-            "$PLANJOY_ANDROID_KEY_ALIAS" \
-            "$PLANJOY_ANDROID_KEY_PASSWORD" \
-            /tmp/font.encpkg \
-            /tmp/iransans.ttf.gz
-
+          java -cp "$RUNNER_TEMP" PlanJoyFontDecrypt "$PLANJOY_ANDROID_KEYSTORE" "$PLANJOY_ANDROID_STORE_PASSWORD" "$PLANJOY_ANDROID_KEY_ALIAS" "$PLANJOY_ANDROID_KEY_PASSWORD" /tmp/font.encpkg /tmp/iransans.ttf.gz
           mkdir -p android_native/app/src/main/res/font
           gzip -dc /tmp/iransans.ttf.gz > android_native/app/src/main/res/font/iransans_xv.ttf
           echo '032d3ab20158ce7213e9018197c150000270d96a83e84db68911d71bdbe47240  android_native/app/src/main/res/font/iransans_xv.ttf' | sha256sum -c -
@@ -197,6 +181,7 @@ jobs:
           EOF
           (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/PlanJoyR7823-Android-Source-v0.7.8.23.zip" PlanJoyR7823-Android-Source)
           sha256sum PlanJoyR7823-Android-Source-v0.7.8.23.zip | tee PlanJoyR7823-Android-Source-SHA256.txt
+          rm -rf "$RUNNER_TEMP/private-signing"
 
       - uses: actions/upload-artifact@v4
         with:

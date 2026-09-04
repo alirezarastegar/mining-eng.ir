@@ -1,0 +1,29 @@
+name: PlanJoy R7.8.23 Build Tools Runtime
+on:
+  workflow_dispatch:
+  push:
+    branches: [tmp-planjoy-r7823-build]
+    paths: ['.github/workflows/planjoy-r7823-tool-runtime.yml']
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: android-actions/setup-android@v3
+      - name: Install and package runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --channel=3 'build-tools;37.0.0'
+          BT="$ANDROID_SDK_ROOT/build-tools/37.0.0"
+          find "$BT" -type f \( -name 'libc++.so' -o -name 'libc++*.so*' \) -print
+          LIB=$(find "$BT" -type f -name 'libc++.so' | head -1)
+          test -n "$LIB" && test -f "$LIB"
+          cp "$LIB" ./libc++.so
+          sha256sum libc++.so > libc++-SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlanJoy-BuildTools37-Runtime
+          retention-days: 7
+          path: |
+            libc++.so
+            libc++-SHA256.txt

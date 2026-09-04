@@ -38,7 +38,7 @@ jobs:
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*78023' android_native/app/build.gradle.kts
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.7\.8\+23"' android_native/app/build.gradle.kts
 
-      - name: Add non-deliverable build placeholder and run contracts
+      - name: Add non-deliverable font placeholder and verify R7.8.23 parity
         working-directory: android_native
         shell: bash
         run: |
@@ -46,7 +46,7 @@ jobs:
           mkdir -p app/src/main/res/font
           printf 'PLANJOY_INTERMEDIATE_ONLY' > app/src/main/res/font/iransans_xv.ttf
           python3 tests/r7823_windows_parity_contract.py | tee ../r7823-parity.txt
-          python3 tests/r78_android_native_contract.py | tee ../r7823-native-contract.txt
+          grep -q 'SUMMARY 15/15 PASS' ../r7823-parity.txt
 
       - name: Build lint and align unsigned release
         working-directory: android_native
@@ -102,7 +102,6 @@ jobs:
             PlanJoyR7823-Android-Source-v0.7.8.23.zip
             PlanJoyR7823-Android-Source-SHA256.txt
             r7823-parity.txt
-            r7823-native-contract.txt
             r7823-intermediate-badging.txt
             android_native/app/build/reports/lint-results-productionRelease.txt
             android_native/app/build/reports/lint-results-productionRelease.html

@@ -1,0 +1,33 @@
+name: PlanJoy R7.8.27 Patch Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tmp-planjoy-r7823-build]
+    paths:
+      - '.github/workflows/planjoy-r7827-patch-diagnostic.yml'
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print exact patch part metadata
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo '--- wc ---'
+          wc -c planjoy-r7827-source/patch/part*.b64
+          echo '--- part sha256 ---'
+          sha256sum planjoy-r7827-source/patch/part*.b64
+          echo '--- concatenated base64 sha256 ---'
+          cat planjoy-r7827-source/patch/part*.b64 | sha256sum
+          echo '--- decoded xz sha256 ---'
+          set +e
+          cat planjoy-r7827-source/patch/part*.b64 | base64 -d > /tmp/r7827.patch.xz
+          rc=$?
+          echo "base64_rc=$rc"
+          sha256sum /tmp/r7827.patch.xz
+          xz -t /tmp/r7827.patch.xz
+          echo "xz_rc=$?"
+          exit 0

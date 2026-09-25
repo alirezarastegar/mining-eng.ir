@@ -1,4 +1,6 @@
-R12.6.3 24h wall-clock burn-in start
+R12.6.3 24h wall-clock burn-in restart after OIDC refresh fix
 started_by=ChatGPT
 stage=R12.6.3
 target_seconds=86400
+failure_fixed=short_lived_oidc_refresh
+previous_run=36094616180

@@ -30,7 +30,7 @@ def start_session():
 def setup():
     out=call("seed",oidc=True,tasks=TASKS); print(json.dumps({"mode":"setup","run_key":RUN_KEY,"result":out},sort_keys=True))
 def worker():
-    start_session(); handled=0; deadline=time.time()+110
+    start_session(); handled=0; deadline=time.time()+300
     while time.time()<deadline:
         call("heartbeat")
         out=call("claim"); task=out.get("task")

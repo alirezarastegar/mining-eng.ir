@@ -1,8 +1,8 @@
-R12.6.3 24h wall-clock burn-in final restart on broker v5
+R12.6.3 24h wall-clock burn-in restart with active broker v5 and stale-run cancellation
 started_by=ChatGPT
 stage=R12.6.3
 target_seconds=86400
 auth_model=github_oidc_bootstrap_plus_run_worker_session
 broker_version=5
-broker_v5_active_probe=session_missing_401
+concurrency_cancel_in_progress=true
 previous_runs=36094616180,36095807031

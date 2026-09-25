@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: r1263-24h-wall-clock
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   BURNIN_JOBS: "450"

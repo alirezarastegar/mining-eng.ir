@@ -11,34 +11,44 @@ JOBS=int(os.environ.get("BURNIN_JOBS","450"))
 JOB_INTERVAL=max(30,int(os.environ.get("JOB_INTERVAL_SECONDS","696")))
 IDLE_INTERVAL=max(10,int(os.environ.get("IDLE_INTERVAL_SECONDS","30")))
 TARGET_SECONDS=int(os.environ.get("TARGET_SECONDS","86400"))
-OIDC_MAX_AGE_SECONDS=240
-_oidc_token=""
-_oidc_minted_at=0.0
+_session_token=""
+_session_expires_at=0.0
 
 def _mint_oidc():
     base=os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]; sep="&" if "?" in base else "?"
     req=urllib.request.Request(base+sep+"audience="+urllib.parse.quote(AUDIENCE,safe=""),headers={"Authorization":"Bearer "+os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]})
     with urllib.request.urlopen(req,timeout=20) as r:return json.loads(r.read().decode())["value"]
 
-def get_oidc(force=False):
-    global _oidc_token,_oidc_minted_at
-    now=time.monotonic()
-    if force or not _oidc_token or now-_oidc_minted_at>=OIDC_MAX_AGE_SECONDS:
-        _oidc_token=_mint_oidc();_oidc_minted_at=now
-    return _oidc_token
+def _post(payload,headers):
+    raw=json.dumps(payload,separators=(",",":")).encode()
+    req=urllib.request.Request(BROKER,data=raw,headers={"Content-Type":"application/json",**headers},method="POST")
+    try:
+        with urllib.request.urlopen(req,timeout=45) as r:return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        body=e.read().decode(errors="replace")
+        raise RuntimeError(f"broker_http_{e.code}:{body[:500]}")
+
+def start_session(force=False):
+    global _session_token,_session_expires_at
+    if MODE=="seed": return
+    if not force and _session_token and time.time()<_session_expires_at-120: return
+    out=_post({"action":"session_start","run_key":RUN_KEY,"worker_id":WORKER_ID},{"Authorization":"Bearer "+_mint_oidc()})
+    if not out.get("ok") or not out.get("session_token"):
+        raise RuntimeError("session_start_failed:"+json.dumps(out,sort_keys=True)[:800])
+    _session_token=str(out["session_token"])
+    _session_expires_at=time.time()+5.25*3600
 
 def call(action,**kwargs):
-    raw=json.dumps({"action":action,"run_key":RUN_KEY,"worker_id":WORKER_ID,**kwargs},separators=(",",":")).encode()
-    for auth_attempt in range(2):
-        req=urllib.request.Request(BROKER,data=raw,headers={"Authorization":"Bearer "+get_oidc(force=auth_attempt>0),"Content-Type":"application/json"},method="POST")
-        try:
-            with urllib.request.urlopen(req,timeout=45) as r:out=json.loads(r.read().decode())
-            break
-        except urllib.error.HTTPError as e:
-            body=e.read().decode(errors="replace")
-            if e.code==401 and auth_attempt==0:continue
-            raise RuntimeError(f"broker_http_{e.code}:{body[:500]}")
-    else:raise RuntimeError("broker_auth_retry_exhausted")
+    payload={"action":action,"run_key":RUN_KEY,"worker_id":WORKER_ID,**kwargs}
+    if action=="seed":
+        out=_post(payload,{"Authorization":"Bearer "+_mint_oidc()})
+    else:
+        start_session()
+        try: out=_post(payload,{"x-mra-worker-session":_session_token})
+        except RuntimeError as exc:
+            if "broker_http_401:" not in str(exc): raise
+            start_session(force=True)
+            out=_post(payload,{"x-mra-worker-session":_session_token})
     if not out.get("ok"):raise RuntimeError("broker_error:"+json.dumps(out,sort_keys=True)[:800])
     return out
 

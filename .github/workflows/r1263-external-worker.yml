@@ -1,0 +1,127 @@
+name: R12.6.3 24h Wall Clock Burn-in
+
+on:
+  push:
+    branches: [r1263-external-worker-cert]
+    paths:
+      - "R1263-LONG-BURN-START"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: r1263-24h-wall-clock
+  cancel-in-progress: false
+
+env:
+  BURNIN_JOBS: "450"
+  BURNIN_SECONDS: "17400"
+  JOB_INTERVAL_SECONDS: "696"
+  IDLE_INTERVAL_SECONDS: "30"
+  TARGET_SECONDS: "86400"
+
+jobs:
+  setup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed wall-clock queue
+        env:
+          MODE: seed
+          WORKER_ID: setup
+        run: python tools/r1263_external_worker.py
+
+  wave1:
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Burn-in wave 1
+        env:
+          MODE: worker
+          WORKER_ID: gh-worker-${{ matrix.worker }}
+        run: python tools/r1263_external_worker.py
+
+  wave2:
+    needs: wave1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Burn-in wave 2
+        env:
+          MODE: worker
+          WORKER_ID: gh-worker-${{ matrix.worker }}
+        run: python tools/r1263_external_worker.py
+
+  wave3:
+    needs: wave2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Burn-in wave 3
+        env:
+          MODE: worker
+          WORKER_ID: gh-worker-${{ matrix.worker }}
+        run: python tools/r1263_external_worker.py
+
+  wave4:
+    needs: wave3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Burn-in wave 4
+        env:
+          MODE: worker
+          WORKER_ID: gh-worker-${{ matrix.worker }}
+        run: python tools/r1263_external_worker.py
+
+  wave5:
+    needs: wave4
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Burn-in wave 5
+        env:
+          MODE: worker
+          WORKER_ID: gh-worker-${{ matrix.worker }}
+        run: python tools/r1263_external_worker.py
+
+  verify:
+    if: always()
+    needs: [setup, wave1, wave2, wave3, wave4, wave5]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify true wall-clock certificate and cleanup
+        env:
+          MODE: verify
+          WORKER_ID: verify
+        run: python tools/r1263_external_worker.py

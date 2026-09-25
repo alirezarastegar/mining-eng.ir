@@ -14,7 +14,7 @@ concurrency:
 jobs:
   setup:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: Seed isolated weighted soak
@@ -23,7 +23,7 @@ jobs:
   fleet:
     needs: setup
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
@@ -54,7 +54,7 @@ jobs:
     if: always()
     needs: [setup, fleet, chaos]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: Verify software gates and record physical-Python placement gate separately

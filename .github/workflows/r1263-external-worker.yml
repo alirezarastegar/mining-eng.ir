@@ -35,6 +35,7 @@ jobs:
 
   wave1:
     needs: setup
+    if: ${{ always() && needs.setup.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
@@ -50,7 +51,8 @@ jobs:
         run: python tools/r1263_external_worker.py
 
   wave2:
-    needs: wave1
+    needs: [setup, wave1]
+    if: ${{ always() && needs.setup.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
@@ -66,7 +68,8 @@ jobs:
         run: python tools/r1263_external_worker.py
 
   wave3:
-    needs: wave2
+    needs: [setup, wave2]
+    if: ${{ always() && needs.setup.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
@@ -82,7 +85,8 @@ jobs:
         run: python tools/r1263_external_worker.py
 
   wave4:
-    needs: wave3
+    needs: [setup, wave3]
+    if: ${{ always() && needs.setup.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
@@ -98,7 +102,8 @@ jobs:
         run: python tools/r1263_external_worker.py
 
   wave5:
-    needs: wave4
+    needs: [setup, wave4]
+    if: ${{ always() && needs.setup.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:

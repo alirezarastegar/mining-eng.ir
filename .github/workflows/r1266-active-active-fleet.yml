@@ -1,0 +1,62 @@
+name: R12.6.6 Active-Active Fleet Soak
+on:
+  push:
+    branches: [r1266-active-active-fleet]
+    paths:
+      - ".github/workflows/r1266-active-active-fleet.yml"
+      - "tools/r1266_active_active_worker.py"
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: r1266-active-active-fleet
+  cancel-in-progress: false
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed isolated weighted soak
+        env: {MODE: setup, WORKER_ID: setup, WORKER_REGION: eu-central-1, SOAK_TASKS: "240"}
+        run: python tools/r1266_active_active_worker.py
+  fleet:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {worker: 1, region: eu-central-1}
+          - {worker: 2, region: eu-central-1}
+          - {worker: 3, region: eu-west-1}
+          - {worker: 4, region: eu-west-1}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Python process worker through region-pinned Edge
+        env:
+          MODE: worker
+          WORKER_ID: r1266-worker-${{ matrix.worker }}
+          WORKER_REGION: ${{ matrix.region }}
+          SOAK_TASKS: "240"
+        run: python tools/r1266_active_active_worker.py
+  chaos:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail primary and restore while fleet is loaded
+        env: {MODE: chaos, WORKER_ID: chaos, WORKER_REGION: eu-west-1, SOAK_TASKS: "240"}
+        run: python tools/r1266_active_active_worker.py
+  verify:
+    if: always()
+    needs: [setup, fleet, chaos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify software gates and record physical-Python placement gate separately
+        env: {MODE: verify, WORKER_ID: verify, WORKER_REGION: eu-central-1, SOAK_TASKS: "240"}
+        run: python tools/r1266_active_active_worker.py
